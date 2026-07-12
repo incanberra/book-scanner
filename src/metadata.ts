@@ -13,6 +13,17 @@ type LookupResult =
   | { kind: "cancelled" }
   | { kind: "failed"; message: string };
 
+export interface SeriesMetadata {
+  seriesName: string;
+  seriesNumber?: string;
+}
+
+export type SeriesLookupResult =
+  | ({ kind: "matched" } & SeriesMetadata)
+  | { kind: "not-found" }
+  | { kind: "offline" }
+  | { kind: "failed" };
+
 interface OpenLibraryDocument {
   key?: string;
   edition_key?: string[];
@@ -27,16 +38,82 @@ interface OpenLibraryDocument {
 }
 
 interface OpenLibraryResponse { docs?: OpenLibraryDocument[] }
+interface OpenLibraryEdition { series?: unknown }
 
 let activeController: AbortController | undefined;
 let operationSequence = 0;
 let lastRequestAt = 0;
+let requestQueue: Promise<void> = Promise.resolve();
+
+const LOOKUP_METADATA_VERSION = 2;
+const REQUEST_INTERVAL_MS = 1_000;
 
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function stringValue(value?: string): string | undefined {
   const cleaned = value?.trim();
   return cleaned || undefined;
+}
+
+function cleanSeriesName(value: string): string {
+  return value.replace(/[\s,;:–—-]+$/gu, "").trim();
+}
+
+export function parseOpenLibrarySeries(value: unknown): SeriesMetadata | undefined {
+  const values = Array.isArray(value) ? value : [value];
+  const raw = values.find((candidate): candidate is string => typeof candidate === "string" && Boolean(candidate.trim()))?.trim();
+  if (!raw) return undefined;
+
+  const patterns = [
+    /^(.*?)\s*\(\s*(?:(?:book|bk\.?|volume|vol\.?)\s*)?#?\s*(\d+(?:\.\d+)?[a-z]?)\s*\)$/iu,
+    /^(.*?)\s*,?\s*#\s*(\d+(?:\.\d+)?[a-z]?)$/iu,
+    /^(.*?)\s*(?:(?:--|[-–—,:])\s*)?(?:book|bk\.?|volume|vol\.?)\s*#?\s*(\d+(?:\.\d+)?[a-z]?)$/iu
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const seriesName = match ? cleanSeriesName(match[1]) : "";
+    if (seriesName && match) return { seriesName, seriesNumber: match[2] };
+  }
+  return { seriesName: raw };
+}
+
+function waitForRequestSlot(requestIntervalMs: number): Promise<void> {
+  const reservation = requestQueue.then(async () => {
+    const delay = Math.max(0, requestIntervalMs - (Date.now() - lastRequestAt));
+    if (delay) await wait(delay);
+    lastRequestAt = Date.now();
+  });
+  requestQueue = reservation.catch(() => undefined);
+  return reservation;
+}
+
+async function requestEditionSeries(
+  isbn13: string,
+  fetcher: typeof fetch,
+  signal: AbortSignal,
+  requestIntervalMs: number
+): Promise<SeriesLookupResult> {
+  await waitForRequestSlot(requestIntervalMs);
+  const response = await fetcher(`https://openlibrary.org/isbn/${encodeURIComponent(isbn13)}.json`, {
+    signal,
+    headers: { Accept: "application/json" }
+  });
+  if (response.status === 404) return { kind: "not-found" };
+  if (!response.ok) return { kind: "failed" };
+  const series = parseOpenLibrarySeries((await response.json() as OpenLibraryEdition).series);
+  return series ? { kind: "matched", ...series } : { kind: "not-found" };
+}
+
+function addSeries(result: LookupResult, series: SeriesLookupResult): LookupResult {
+  if (series.kind !== "matched") return result;
+  const fields = { seriesName: series.seriesName, seriesNumber: series.seriesNumber };
+  if (result.kind === "matched") return { ...result, candidate: { ...result.candidate, ...fields } };
+  if (result.kind === "ambiguous") return {
+    ...result,
+    candidates: result.candidates.map((candidate) => ({ ...candidate, ...fields }))
+  };
+  return result;
 }
 
 export function classifyOpenLibraryResponse(payload: OpenLibraryResponse, requestedIsbn: string): LookupResult {
@@ -77,6 +154,10 @@ export function classifyOpenLibraryResponse(payload: OpenLibraryResponse, reques
 async function readCache(isbn13: string): Promise<LookupResult | undefined> {
   const cached = await lookupCacheTable.get(isbn13);
   if (!cached) return undefined;
+  if (cached.metadataVersion !== LOOKUP_METADATA_VERSION) {
+    await lookupCacheTable.delete(isbn13);
+    return undefined;
+  }
   if (cached.expiresAt && Date.parse(cached.expiresAt) <= Date.now()) {
     await lookupCacheTable.delete(isbn13);
     return undefined;
@@ -91,6 +172,7 @@ async function writeCache(isbn13: string, result: LookupResult): Promise<void> {
   const record: LookupCacheRecord = {
     isbn13,
     outcome: result.kind,
+    metadataVersion: LOOKUP_METADATA_VERSION,
     candidate: result.kind === "matched" ? result.candidate : undefined,
     lookedUpAt: new Date().toISOString(),
     expiresAt: result.kind === "not-found"
@@ -106,7 +188,31 @@ export function cancelLookup(): void {
   activeController = undefined;
 }
 
-export async function lookupBook(isbnInput: string, fetcher: typeof fetch = fetch): Promise<LookupResult> {
+export async function lookupSeriesByIsbn(
+  isbnInput: string,
+  fetcher: typeof fetch = fetch,
+  requestIntervalMs = REQUEST_INTERVAL_MS
+): Promise<SeriesLookupResult> {
+  const isbn13 = normaliseIsbn(isbnInput);
+  if (!isbn13) return { kind: "not-found" };
+  if (!navigator.onLine) return { kind: "offline" };
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8_000);
+  try {
+    return await requestEditionSeries(isbn13, fetcher, controller.signal, requestIntervalMs);
+  } catch {
+    return navigator.onLine ? { kind: "failed" } : { kind: "offline" };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export async function lookupBook(
+  isbnInput: string,
+  fetcher: typeof fetch = fetch,
+  requestIntervalMs = REQUEST_INTERVAL_MS
+): Promise<LookupResult> {
   const isbn13 = normaliseIsbn(isbnInput);
   if (!isbn13) return { kind: "not-found" };
 
@@ -126,10 +232,8 @@ export async function lookupBook(isbnInput: string, fetcher: typeof fetch = fetc
     return { kind: "offline" };
   }
 
-  const delay = Math.max(0, 1_000 - (Date.now() - lastRequestAt));
-  if (delay) await wait(delay);
+  await waitForRequestSlot(requestIntervalMs);
   if (operationId !== operationSequence) return { kind: "cancelled" };
-  lastRequestAt = Date.now();
 
   let timedOut = false;
   const timeout = window.setTimeout(() => {
@@ -144,9 +248,21 @@ export async function lookupBook(isbnInput: string, fetcher: typeof fetch = fetc
     if (operationId !== operationSequence) return { kind: "cancelled" };
     if (response.status === 429) return { kind: "failed", message: "Open Library is busy. Wait a moment, retry, or enter the details manually." };
     if (!response.ok) return { kind: "failed", message: "Book lookup failed. Retry or enter the details manually." };
-    const result = classifyOpenLibraryResponse(await response.json() as OpenLibraryResponse, isbn13);
+    let result = classifyOpenLibraryResponse(await response.json() as OpenLibraryResponse, isbn13);
+    let cacheable = true;
     if (operationId !== operationSequence) return { kind: "cancelled" };
-    await writeCache(isbn13, result);
+    if (result.kind === "matched" || result.kind === "ambiguous") {
+      try {
+        const seriesResult = await requestEditionSeries(isbn13, fetcher, controller.signal, requestIntervalMs);
+        result = addSeries(result, seriesResult);
+        cacheable = seriesResult.kind === "matched" || seriesResult.kind === "not-found";
+      } catch {
+        // Series enrichment is best-effort; the exact-edition lookup must not discard valid book details.
+        cacheable = false;
+      }
+      if (operationId !== operationSequence) return { kind: "cancelled" };
+    }
+    if (cacheable) await writeCache(isbn13, result);
     return result;
   } catch (error) {
     if (operationId !== operationSequence) return { kind: "cancelled" };

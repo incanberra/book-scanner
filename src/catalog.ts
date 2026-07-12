@@ -46,6 +46,8 @@ export interface MetadataCandidate {
   title: string;
   subtitle?: string;
   authors: string[];
+  seriesName?: string;
+  seriesNumber?: string;
   publisher?: string;
   publishedDate?: string;
   coverUrl?: string;
@@ -54,6 +56,7 @@ export interface MetadataCandidate {
 export interface LookupCacheRecord {
   isbn13: string;
   outcome: "matched" | "not-found";
+  metadataVersion?: number;
   candidate?: MetadataCandidate;
   lookedUpAt: string;
   expiresAt?: string;
@@ -299,8 +302,8 @@ export function candidateToDraft(candidate: MetadataCandidate): BookDraft {
     title: candidate.title,
     subtitle: candidate.subtitle,
     authors: candidate.authors.length ? candidate.authors : ["Unknown author"],
-    seriesName: undefined,
-    seriesNumber: undefined,
+    seriesName: candidate.seriesName,
+    seriesNumber: candidate.seriesNumber,
     publisher: candidate.publisher,
     publishedDate: candidate.publishedDate,
     coverUrl: candidate.coverUrl,

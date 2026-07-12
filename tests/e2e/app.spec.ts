@@ -3,7 +3,17 @@ import { expect, test, type Page } from "@playwright/test";
 
 const isbn = "9780140328721";
 
-async function mockOpenLibrary(page: Page, title = "Matilda"): Promise<void> {
+async function mockEditionSeries(page: Page, series: string[] = []): Promise<void> {
+  await page.route(`**/isbn/${isbn}.json`, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ series })
+    });
+  });
+}
+
+async function mockOpenLibrary(page: Page, title = "Matilda", series: string[] = []): Promise<void> {
+  await mockEditionSeries(page, series);
   await page.route("**/search.json?**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -48,6 +58,16 @@ test("lookup, edit, save, search, and reopen a book", async ({ page }) => {
   await expect(page.getByLabel("Favourite")).toBeVisible();
 });
 
+test("new ISBN lookup fills normalized series details", async ({ page }) => {
+  await mockOpenLibrary(page, "A series book", ["Example Saga, #3"]);
+  await page.goto("/");
+  await page.getByLabel("ISBN-10 or ISBN-13").fill(isbn);
+  await page.getByRole("button", { name: "Find book" }).click();
+
+  await expect(page.getByRole("textbox", { name: "Series", exact: true })).toHaveValue("Example Saga");
+  await expect(page.getByRole("textbox", { name: "Series number" })).toHaveValue("3");
+});
+
 test("background status changes do not replace the editor during a mobile tap", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
@@ -75,11 +95,12 @@ test("repeated save-and-scan-another taps create only one ISBN-less book", async
   });
 
   await expect(page.getByRole("heading", { name: "Scan a book" })).toBeVisible();
-  await page.getByRole("button", { name: "Collection" }).click();
+  await page.getByRole("button", { name: "Collection", exact: true }).click();
   await expect(page.getByText("One tap, one book", { exact: true })).toHaveCount(1);
 });
 
 test("a superseded slow lookup cannot overwrite the active book", async ({ page }) => {
+  await mockEditionSeries(page);
   let requestCount = 0;
   await page.route("**/search.json?**", async (route) => {
     requestCount += 1;
@@ -104,6 +125,38 @@ test("a superseded slow lookup cannot overwrite the active book", async ({ page 
   await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Current book", { timeout: 5_000 });
   await page.waitForTimeout(1_500);
   await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Current book");
+});
+
+test("settings backfill adds missing series to an existing ISBN book", async ({ page }) => {
+  await mockEditionSeries(page, ["Recovered Saga -- bk. 2"]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Existing book");
+  await page.getByLabel(/Authors/).fill("Test Author");
+  await page.getByRole("textbox", { name: "ISBN" }).fill(isbn);
+  await page.getByRole("button", { name: "Save book" }).click();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Check 1 book" }).click();
+  await expect(page.getByText("Series lookup finished. 1 book was updated.")).toBeVisible();
+  await page.getByRole("button", { name: "Collection", exact: true }).click();
+  await page.getByRole("button", { name: "Series" }).click();
+  await expect(page.getByRole("heading", { name: /Recovered Saga/ })).toBeVisible();
+  await expect(page.getByText("Recovered Saga · 2", { exact: true })).toBeVisible();
+});
+
+test("settings backfill preserves manually entered series", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Manual series book");
+  await page.getByLabel(/Authors/).fill("Test Author");
+  await page.getByRole("textbox", { name: "ISBN" }).fill(isbn);
+  await page.getByRole("textbox", { name: "Series", exact: true }).fill("My Correct Series");
+  await page.getByRole("textbox", { name: "Series number" }).fill("4");
+  await page.getByRole("button", { name: "Save book" }).click();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("button", { name: "No missing series" })).toBeDisabled();
 });
 
 test("exports and safely replaces the catalogue from the downloaded backup", async ({ page }, testInfo) => {

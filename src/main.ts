@@ -31,7 +31,7 @@ import {
   type ReadingStatus,
   ValidationError
 } from "./catalog";
-import { cancelLookup, lookupBook } from "./metadata";
+import { cancelLookup, lookupBook, lookupSeriesByIsbn } from "./metadata";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
 
@@ -60,6 +60,15 @@ interface AppState {
   databaseUpdateRequired: boolean;
   lastBackupPreparedAt?: string;
   backupReminderDismissed: boolean;
+  seriesBackfill?: {
+    running: boolean;
+    cancelRequested: boolean;
+    total: number;
+    processed: number;
+    updated: number;
+    notFound: number;
+    failed: number;
+  };
 }
 
 interface BeforeInstallPromptEvent extends Event {
@@ -298,6 +307,15 @@ function settingsView(): string {
         </div>
       </div>`
     : "";
+  const missingSeriesCount = state.books.filter((book) => book.isbn13 && !book.seriesName).length;
+  const missingSeriesLabel = `${missingSeriesCount} ${missingSeriesCount === 1 ? "book" : "books"}`;
+  const seriesBackfill = state.seriesBackfill;
+  const seriesProgress = seriesBackfill
+    ? `<div class="notice notice--${seriesBackfill.running ? "info" : "success"}" role="status">
+        <strong>${seriesBackfill.running ? (seriesBackfill.cancelRequested ? "Stopping series lookup…" : `Finding series ${seriesBackfill.processed}/${seriesBackfill.total}`) : "Series lookup finished"}</strong>
+        <p>${seriesBackfill.updated} updated · ${seriesBackfill.notFound} not found · ${seriesBackfill.failed} failed</p>
+      </div>`
+    : "";
   return `${topBar("Settings", "This device")}${statusMarkup()}
     <main id="main-content" class="content settings-content">
       <section class="settings-card"><h2>Install Book Scanner</h2><p>Add it to your Android home screen for a full-screen, app-like experience.</p><button class="button" data-action="install-app" ${deferredInstall ? "" : "disabled"}>${deferredInstall ? "Install app" : "Already installed or unavailable"}</button></section>
@@ -306,6 +324,13 @@ function settingsView(): string {
         ${backupReminder}${lastBackup}
         <div class="button-row"><button class="button" data-action="export-backup">Export collection</button><label class="button button--secondary file-button">Choose backup<input id="backup-file" type="file" accept=".json,application/json" /></label></div>
         ${preview}
+      </section>
+      <section class="settings-card"><p class="eyebrow">Catalogue cleanup</p><h2>Find missing series</h2><p>Check exact-edition Open Library records for saved ISBN books. Only books without a series name are updated; your manual series entries are never replaced.</p>
+        ${seriesProgress}
+        <div class="button-row">
+          <button class="button" data-action="backfill-series" ${seriesBackfill?.running || missingSeriesCount === 0 ? "disabled" : ""}>${missingSeriesCount ? `Check ${missingSeriesLabel}` : "No missing series"}</button>
+          ${seriesBackfill?.running ? `<button class="button button--secondary" data-action="cancel-series-backfill" ${seriesBackfill.cancelRequested ? "disabled" : ""}>${seriesBackfill.cancelRequested ? "Stopping…" : "Stop"}</button>` : ""}
+        </div>
       </section>
       <section class="settings-card"><h2>Book information</h2><p>New ISBN lookups use <a href="https://openlibrary.org" target="_blank" rel="noreferrer">Open Library</a>. Saved book facts remain available without it.</p></section>
     </main>`;
@@ -571,6 +596,69 @@ async function confirmReplacement(): Promise<void> {
   render();
 }
 
+async function backfillMissingSeries(): Promise<void> {
+  if (state.seriesBackfill?.running) return;
+  const targets = state.books.filter((book) => book.isbn13 && !book.seriesName);
+  if (!targets.length) {
+    setMessage("info", "All ISBN books already have series information or have been checked manually.");
+    render();
+    return;
+  }
+
+  state.seriesBackfill = {
+    running: true,
+    cancelRequested: false,
+    total: targets.length,
+    processed: 0,
+    updated: 0,
+    notFound: 0,
+    failed: 0
+  };
+  state.message = undefined;
+  render();
+
+  for (const target of targets) {
+    const progress = state.seriesBackfill;
+    if (!progress || progress.cancelRequested) break;
+    try {
+      const result = await lookupSeriesByIsbn(target.isbn13!);
+      if (result.kind === "matched") {
+        const current = await booksTable.get(target.id);
+        if (current && !current.seriesName) {
+          await saveBook({
+            ...bookToDraft(current),
+            seriesName: result.seriesName,
+            seriesNumber: current.seriesNumber ?? result.seriesNumber
+          });
+          progress.updated += 1;
+        }
+      } else if (result.kind === "not-found") {
+        progress.notFound += 1;
+      } else {
+        progress.failed += 1;
+        if (result.kind === "offline") progress.cancelRequested = true;
+      }
+    } catch {
+      progress.failed += 1;
+    }
+    progress.processed += 1;
+    if (state.view === "settings") render();
+  }
+
+  const progress = state.seriesBackfill;
+  if (!progress) return;
+  const stopped = progress.cancelRequested && progress.processed < progress.total;
+  const updatedLabel = `${progress.updated} ${progress.updated === 1 ? "book" : "books"}`;
+  progress.running = false;
+  setMessage(
+    progress.failed ? "warning" : "success",
+    stopped
+      ? `Series lookup stopped after ${progress.processed} books. ${updatedLabel} ${progress.updated === 1 ? "was" : "were"} updated.`
+      : `Series lookup finished. ${updatedLabel} ${progress.updated === 1 ? "was" : "were"} updated.`
+  );
+  render();
+}
+
 function bindEvents(): void {
   document.querySelectorAll<HTMLElement>("[data-nav]").forEach((element) => element.addEventListener("click", () => navigation(element.dataset.nav as View)));
   document.querySelector<HTMLFormElement>("#isbn-form")?.addEventListener("submit", (event) => {
@@ -628,6 +716,11 @@ function bindEvents(): void {
     if (action === "export-backup") void exportCurrentCatalogue(false);
     if (action === "safety-export") void exportCurrentCatalogue(true);
     if (action === "replace-catalogue") void confirmReplacement();
+    if (action === "backfill-series") void backfillMissingSeries();
+    if (action === "cancel-series-backfill" && state.seriesBackfill?.running) {
+      state.seriesBackfill.cancelRequested = true;
+      render();
+    }
     if (action === "reload-app") window.location.reload();
     if (action === "dismiss-backup-reminder") void setSetting("backup-reminder-dismissed", true).then(() => { state.backupReminderDismissed = true; render(); });
   }));
