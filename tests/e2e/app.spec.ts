@@ -1,0 +1,106 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test, type Page } from "@playwright/test";
+
+const isbn = "9780140328721";
+
+async function mockOpenLibrary(page: Page, title = "Matilda"): Promise<void> {
+  await page.route("**/search.json?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        docs: [{
+          edition_key: ["OL7353617M"],
+          title,
+          author_name: ["Roald Dahl"],
+          publisher: ["Puffin"],
+          publish_date: ["1988"],
+          isbn: [isbn],
+          cover_i: 8739161
+        }]
+      })
+    });
+  });
+}
+
+async function addBook(page: Page): Promise<void> {
+  await mockOpenLibrary(page);
+  await page.goto("/");
+  await page.getByLabel("ISBN-10 or ISBN-13").fill(isbn);
+  await page.getByRole("button", { name: "Find book" }).click();
+  await expect(page.getByRole("heading", { name: "New book" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Matilda");
+  await expect(page.getByLabel(/Authors/)).toHaveValue("Roald Dahl");
+  await page.getByRole("button", { name: "Save book" }).click();
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+  await expect(page.getByText("Matilda", { exact: true })).toBeVisible();
+}
+
+test("lookup, edit, save, search, and reopen a book", async ({ page }) => {
+  await addBook(page);
+  await page.getByLabel("Search collection").fill("Roald");
+  await expect(page.getByText("Matilda", { exact: true })).toBeVisible();
+  await page.getByText("Matilda", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Book details" })).toBeVisible();
+  await page.getByLabel("Reading status").selectOption("read");
+  await page.getByText("Favourite").click();
+  await page.getByRole("button", { name: "Save book" }).click();
+  await expect(page.getByText("read", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Favourite")).toBeVisible();
+});
+
+test("a superseded slow lookup cannot overwrite the active book", async ({ page }) => {
+  let requestCount = 0;
+  await page.route("**/search.json?**", async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ docs: [{
+        edition_key: [`OL${requestCount}M`],
+        title: requestCount === 1 ? "Stale book" : "Current book",
+        author_name: ["Test Author"],
+        isbn: [isbn]
+      }] })
+    });
+  });
+  await page.goto("/");
+  await page.getByLabel("ISBN-10 or ISBN-13").fill(isbn);
+  await page.getByRole("button", { name: "Find book" }).click();
+  await page.getByRole("button", { name: "Collection" }).click();
+  await page.getByRole("button", { name: "Scan", exact: true }).click();
+  await page.getByLabel("ISBN-10 or ISBN-13").fill(isbn);
+  await page.getByRole("button", { name: "Find book" }).click();
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Current book", { timeout: 5_000 });
+  await page.waitForTimeout(1_500);
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Current book");
+});
+
+test("exports and safely replaces the catalogue from the downloaded backup", async ({ page }, testInfo) => {
+  await addBook(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+  const exportDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export collection" }).click();
+  const backup = await exportDownload;
+  const backupPath = testInfo.outputPath("catalogue.json");
+  await backup.saveAs(backupPath);
+
+  await page.locator("#backup-file").setInputFiles(backupPath);
+  await expect(page.getByText("Validated backup")).toBeVisible();
+  const safetyDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "1. Download current collection" }).click();
+  await safetyDownload;
+  await page.getByLabel("I have retained the safety copy").check();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Replace collection" }).click();
+  await expect(page.getByText("Collection replaced with 1 books.")).toBeVisible();
+});
+
+test("primary screens have no serious automated accessibility violations", async ({ page }) => {
+  await page.goto("/");
+  const scanResults = await new AxeBuilder({ page }).analyze();
+  expect(scanResults.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""))).toEqual([]);
+
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  const editorResults = await new AxeBuilder({ page }).analyze();
+  expect(editorResults.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""))).toEqual([]);
+});

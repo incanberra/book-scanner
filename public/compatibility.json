@@ -1,0 +1,7 @@
+{
+  "appVersion": "0.1.0",
+  "databaseSchema": 1,
+  "oldestReadableSchema": 1,
+  "backupFormat": 1,
+  "upgradeFixtureVersion": 1
+}

@@ -1,0 +1,25 @@
+{
+  "formatName": "book-scanner-catalogue",
+  "formatVersion": 1,
+  "appVersion": "0.1.0",
+  "exportedAt": "2026-07-12T00:00:00.000Z",
+  "books": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "isbn13": "9780140328721",
+      "title": "Matilda",
+      "authors": [
+        "Roald Dahl"
+      ],
+      "publisher": "Puffin",
+      "publishedDate": "1988",
+      "coverUrl": "https://covers.openlibrary.org/b/id/123-M.jpg",
+      "favourite": true,
+      "readingStatus": "read",
+      "metadataSource": "openlibrary",
+      "metadataFetchedAt": "2026-07-11T23:00:00.000Z",
+      "createdAt": "2026-07-11T23:00:00.000Z",
+      "updatedAt": "2026-07-11T23:30:00.000Z"
+    }
+  ]
+}

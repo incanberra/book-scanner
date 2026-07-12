@@ -1,0 +1,33 @@
+{
+  "name": "book-scanner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@zxing/browser": "latest",
+    "dexie": "latest"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "latest",
+    "fake-indexeddb": "latest",
+    "jsdom": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vite-plugin-pwa": "latest",
+    "vitest": "latest"
+  }
+}
