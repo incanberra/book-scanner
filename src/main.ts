@@ -52,6 +52,7 @@ interface AppState {
   updateAction?: () => Promise<void>;
   deletedBook?: Book;
   draftDirty: boolean;
+  savingBook: boolean;
   backupPreview?: BackupPreview;
   backupFileName?: string;
   backupSafetyPrepared: boolean;
@@ -79,6 +80,7 @@ const state: AppState = {
   groupMode: "title",
   offlineReady: false,
   draftDirty: false,
+  savingBook: false,
   backupSafetyPrepared: false,
   backupAcknowledged: false,
   databaseUpdateRequired: false,
@@ -214,10 +216,10 @@ function input(name: keyof BookDraft, label: string, value?: string, options = "
 function editorView(): string {
   const draft = state.draft ?? emptyDraft();
   const existing = Boolean(draft.id);
-  return `<header class="editor-bar"><button class="icon-button" data-action="close-editor" aria-label="Close editor">←</button><div><p class="eyebrow">${existing ? "Editing your copy" : "Confirm the details"}</p><h1>${existing ? "Book details" : "New book"}</h1></div></header>
+  return `<header class="editor-bar"><button class="icon-button" data-action="close-editor" aria-label="Close editor" ${state.savingBook ? "disabled" : ""}>←</button><div><p class="eyebrow">${existing ? "Editing your copy" : "Confirm the details"}</p><h1>${existing ? "Book details" : "New book"}</h1></div></header>
     ${statusMarkup()}
     <main id="main-content" class="content editor-content">
-      <form id="book-form" class="book-form">
+      <form id="book-form" class="book-form" aria-busy="${state.savingBook}">
         <section class="book-hero">
           <div class="cover-preview">${draft.coverUrl ? `<img src="${escapeHtml(draft.coverUrl)}" alt="Book cover" referrerpolicy="no-referrer" />` : `<span aria-hidden="true">▥</span><small>No cover</small>`}</div>
           <div class="book-hero__fields">
@@ -239,8 +241,8 @@ function editorView(): string {
         <label class="check-field"><input type="checkbox" name="favourite" ${draft.favourite ? "checked" : ""} /><span aria-hidden="true">★</span> Favourite</label>
         ${draft.coverUrl ? `<button class="text-button" type="button" data-action="remove-cover">Remove cover</button>` : ""}
         <div class="form-actions">
-          <button class="button button--wide" type="submit">Save book</button>
-          ${!existing ? `<button class="button button--wide button--secondary" type="button" data-action="save-next">Save and scan another</button>` : ""}
+          <button class="button button--wide" type="submit" data-save-button ${state.savingBook ? "disabled" : ""}>${state.savingBook ? "Saving…" : "Save book"}</button>
+          ${!existing ? `<button class="button button--wide button--secondary" type="button" data-action="save-next" ${state.savingBook ? "disabled" : ""}>Save and scan another</button>` : ""}
           ${existing ? `<button class="text-button text-button--danger" type="button" data-action="delete-book">Delete book</button>` : ""}
         </div>
       </form>
@@ -328,6 +330,10 @@ function render(): void {
   const view = state.view === "scan" ? scanView() : state.view === "editor" ? editorView() : state.view === "collection" ? collectionView() : settingsView();
   root.innerHTML = `<div class="app-shell">${view}${bottomNav()}${undoMarkup()}</div>`;
   bindEvents();
+}
+
+function renderOutsideEditor(): void {
+  if (state.view !== "editor" || !document.querySelector("#book-form")) render();
 }
 
 function readDraftForm(): BookDraft | undefined {
@@ -450,11 +456,23 @@ async function startCamera(): Promise<void> {
 }
 
 async function submitBook(scanNext = false): Promise<void> {
+  if (state.savingBook) return;
+  const form = document.querySelector<HTMLFormElement>("#book-form");
+  if (!form?.reportValidity()) return;
   const draft = readDraftForm();
   if (!draft) return;
+  window.clearTimeout(draftTimer);
+  draftTimer = undefined;
+  state.draft = draft;
+  state.savingBook = true;
+  form.setAttribute("aria-busy", "true");
+  form.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = true; });
+  const saveButton = form.querySelector<HTMLButtonElement>("[data-save-button]");
+  if (saveButton) saveButton.textContent = "Saving…";
   try {
     const book = await saveBook(draft);
     await clearActiveDraft();
+    state.savingBook = false;
     state.draft = undefined;
     state.draftDirty = false;
     state.recoverableDraft = undefined;
@@ -467,6 +485,7 @@ async function submitBook(scanNext = false): Promise<void> {
     }
     render();
   } catch (error) {
+    state.savingBook = false;
     if (error instanceof DuplicateBookError) {
       const existing = await booksTable.get(error.existingId);
       if (existing) state.draft = bookToDraft(existing);
@@ -619,8 +638,8 @@ window.addEventListener("beforeinstallprompt", (event) => {
   deferredInstall = event as BeforeInstallPromptEvent;
   if (state.view === "settings") render();
 });
-window.addEventListener("online", render);
-window.addEventListener("offline", render);
+window.addEventListener("online", renderOutsideEditor);
+window.addEventListener("offline", renderOutsideEditor);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && scannerSession) {
     stopScanner();
@@ -640,18 +659,18 @@ window.addEventListener("bookscanner:database-blocked", () => {
 });
 
 initialisePwa({
-  onOfflineReady: () => { state.offlineReady = true; setMessage("success", "Book Scanner is ready to work offline."); render(); },
-  onUpdateAvailable: (applyUpdate) => { state.updateAction = applyUpdate; render(); }
+  onOfflineReady: () => { state.offlineReady = true; setMessage("success", "Book Scanner is ready to work offline."); renderOutsideEditor(); },
+  onUpdateAvailable: (applyUpdate) => { state.updateAction = applyUpdate; renderOutsideEditor(); }
 });
 
 observeBooks((books) => {
   state.books = books;
-  render();
+  renderOutsideEditor();
 });
 
 void loadActiveDraft().then((draft) => {
-  state.recoverableDraft = draft;
-  render();
+  if (!state.draft) state.recoverableDraft = draft;
+  renderOutsideEditor();
 });
 void Promise.all([
   getSetting<string>("last-backup-prepared-at"),
@@ -659,7 +678,7 @@ void Promise.all([
 ]).then(([lastBackupPreparedAt, backupReminderDismissed]) => {
   state.lastBackupPreparedAt = lastBackupPreparedAt;
   state.backupReminderDismissed = Boolean(backupReminderDismissed);
-  render();
+  renderOutsideEditor();
 });
 
 render();

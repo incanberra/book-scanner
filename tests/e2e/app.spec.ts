@@ -48,6 +48,37 @@ test("lookup, edit, save, search, and reopen a book", async ({ page }) => {
   await expect(page.getByLabel("Favourite")).toBeVisible();
 });
 
+test("background status changes do not replace the editor during a mobile tap", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Stable editor");
+  await page.getByLabel(/Authors/).fill("Test Author");
+
+  const saveButtonStayedConnected = await page.getByRole("button", { name: "Save book" }).evaluate((button) => {
+    window.dispatchEvent(new Event("online"));
+    return button.isConnected;
+  });
+
+  expect(saveButtonStayedConnected).toBe(true);
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Stable editor");
+});
+
+test("repeated save-and-scan-another taps create only one ISBN-less book", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("One tap, one book");
+  await page.getByLabel(/Authors/).fill("Test Author");
+
+  await page.getByRole("button", { name: "Save and scan another" }).evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+
+  await expect(page.getByRole("heading", { name: "Scan a book" })).toBeVisible();
+  await page.getByRole("button", { name: "Collection" }).click();
+  await expect(page.getByText("One tap, one book", { exact: true })).toHaveCount(1);
+});
+
 test("a superseded slow lookup cannot overwrite the active book", async ({ page }) => {
   let requestCount = 0;
   await page.route("**/search.json?**", async (route) => {
