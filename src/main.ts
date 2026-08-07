@@ -494,21 +494,9 @@ async function submitBook(scanNext = false): Promise<void> {
   form.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = true; });
   const saveButton = form.querySelector<HTMLButtonElement>("[data-save-button]");
   if (saveButton) saveButton.textContent = "Saving…";
+  let book: Book;
   try {
-    const book = await saveBook(draft);
-    await clearActiveDraft();
-    state.savingBook = false;
-    state.draft = undefined;
-    state.draftDirty = false;
-    state.recoverableDraft = undefined;
-    setMessage("success", `Saved “${book.title}”.`);
-    if (scanNext) {
-      state.view = "scan";
-      state.scanState = "ready";
-    } else {
-      state.view = "collection";
-    }
-    render();
+    book = await saveBook(draft);
   } catch (error) {
     state.savingBook = false;
     if (error instanceof DuplicateBookError) {
@@ -517,20 +505,60 @@ async function submitBook(scanNext = false): Promise<void> {
     }
     setMessage("error", error instanceof Error ? error.message : "The book could not be saved.");
     render();
+    return;
+  }
+
+  const draftCleared = await clearDraftAfterMutation("save");
+  state.savingBook = false;
+  state.draft = undefined;
+  state.draftDirty = false;
+  state.recoverableDraft = undefined;
+  setMessage(
+    draftCleared ? "success" : "warning",
+    draftCleared
+      ? `Saved “${book.title}”.`
+      : `Saved “${book.title}”, but temporary recovery data could not be cleared. Your book is safe.`
+  );
+  if (scanNext) {
+    state.view = "scan";
+    state.scanState = "ready";
+  } else {
+    state.view = "collection";
+  }
+  render();
+}
+
+async function clearDraftAfterMutation(operation: "save" | "delete"): Promise<boolean> {
+  try {
+    await clearActiveDraft();
+    return true;
+  } catch (error) {
+    console.warn(`Book ${operation} succeeded but draft cleanup failed`, error);
+    return false;
   }
 }
 
 async function deleteCurrentBook(): Promise<void> {
   const id = state.draft?.id;
   if (!id || !window.confirm("Delete this book from your collection?")) return;
-  const deleted = await removeBook(id);
-  await clearActiveDraft();
+  let deleted: Book | undefined;
+  try {
+    deleted = await removeBook(id);
+  } catch (error) {
+    setMessage("error", error instanceof Error ? error.message : "The book could not be deleted.");
+    render();
+    return;
+  }
   if (!deleted) return;
+  const draftCleared = await clearDraftAfterMutation("delete");
   state.deletedBook = deleted;
   state.draft = undefined;
   state.draftDirty = false;
   state.view = "collection";
-  setMessage("success", "Book deleted.");
+  setMessage(
+    draftCleared ? "success" : "warning",
+    draftCleared ? "Book deleted." : "Book deleted, but temporary recovery data could not be cleared."
+  );
   window.clearTimeout(undoTimer);
   undoTimer = window.setTimeout(() => { state.deletedBook = undefined; render(); }, 10_000);
   render();

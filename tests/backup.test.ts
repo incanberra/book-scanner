@@ -6,7 +6,9 @@ import {
   validateBackupJson,
   type BackupPreview
 } from "../src/backup";
-import { bookDatabase, booksTable, lookupCacheTable, type Book } from "../src/catalog";
+import { bookDatabase, booksTable, getSetting, lookupCacheTable, type Book } from "../src/catalog";
+
+const settingsTable = bookDatabase.table<{ key: string; value: unknown }, string>("settings");
 
 const oldBook: Book = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -22,9 +24,10 @@ const oldBook: Book = {
 };
 
 beforeEach(async () => {
-  await bookDatabase.transaction("rw", booksTable, lookupCacheTable, async () => {
+  await bookDatabase.transaction("rw", booksTable, lookupCacheTable, settingsTable, async () => {
     await booksTable.clear();
     await lookupCacheTable.clear();
+    await settingsTable.clear();
   });
 });
 
@@ -81,6 +84,27 @@ describe("portable catalogue backup v1", () => {
     await replaceCatalogue(preview);
     expect((await booksTable.toArray()).map((book) => book.title)).toEqual(["Matilda"]);
     expect(await lookupCacheTable.count()).toBe(0);
+    expect(await getSetting<string>("last-backup-imported-at")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("rolls back the catalogue when recording import status fails", async () => {
+    await booksTable.add(oldBook);
+    await lookupCacheTable.add({ isbn13: oldBook.isbn13!, outcome: "not-found", lookedUpAt: oldBook.updatedAt });
+    const preview = validateBackupJson(JSON.stringify(fixture));
+    const failImportStatus = (_key: string, record: { key: string }): void => {
+      if (record.key === "last-backup-imported-at") throw new Error("Simulated settings write failure");
+    };
+    settingsTable.hook("creating", failImportStatus);
+
+    try {
+      await expect(replaceCatalogue(preview)).rejects.toThrow(/Simulated settings write failure/);
+    } finally {
+      settingsTable.hook.creating.unsubscribe(failImportStatus);
+    }
+
+    expect(await booksTable.toArray()).toEqual([oldBook]);
+    expect(await lookupCacheTable.count()).toBe(1);
+    expect(await getSetting("last-backup-imported-at")).toBeUndefined();
   });
 
   it("rolls back the clear when a replacement transaction aborts", async () => {

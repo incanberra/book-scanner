@@ -430,8 +430,18 @@ export async function loadActiveDraft(): Promise<BookDraft | undefined> {
 }
 
 export async function clearActiveDraft(): Promise<void> {
-  sessionStorage.removeItem(DRAFT_KEY);
-  await settingsTable.delete(DRAFT_KEY);
+  let cleanupError: unknown;
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch (error) {
+    cleanupError = error;
+  }
+  try {
+    await settingsTable.delete(DRAFT_KEY);
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  if (cleanupError) throw cleanupError;
 }
 
 export async function setSetting(key: string, value: unknown): Promise<void> {

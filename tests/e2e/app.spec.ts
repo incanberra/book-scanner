@@ -45,6 +45,16 @@ async function addBook(page: Page): Promise<void> {
   await expect(page.getByText("Matilda", { exact: true })).toBeVisible();
 }
 
+async function makeDraftCleanupFail(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function (key: string): void {
+      if (key === "active-book-draft-v1") throw new Error("Simulated draft cleanup failure");
+      removeItem.call(this, key);
+    };
+  });
+}
+
 test("lookup, edit, save, search, and reopen a book", async ({ page }) => {
   await addBook(page);
   await page.getByLabel("Search collection").fill("Roald");
@@ -97,6 +107,37 @@ test("repeated save-and-scan-another taps create only one ISBN-less book", async
   await expect(page.getByRole("heading", { name: "Scan a book" })).toBeVisible();
   await page.getByRole("button", { name: "Collection", exact: true }).click();
   await expect(page.getByText("One tap, one book", { exact: true })).toHaveCount(1);
+});
+
+test("a draft cleanup error cannot report a committed save as failed", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Safely committed");
+  await page.getByLabel(/Authors/).fill("Test Author");
+  await makeDraftCleanupFail(page);
+
+  await page.getByRole("button", { name: "Save book" }).click();
+
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+  await expect(page.getByText("Safely committed", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Saved .*temporary recovery data could not be cleared/)).toBeVisible();
+});
+
+test("a draft cleanup error cannot report a committed deletion as failed", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Delete me safely");
+  await page.getByLabel(/Authors/).fill("Test Author");
+  await page.getByRole("button", { name: "Save book" }).click();
+  await page.getByText("Delete me safely", { exact: true }).click();
+  await makeDraftCleanupFail(page);
+  page.once("dialog", (dialog) => dialog.accept());
+
+  await page.getByRole("button", { name: "Delete book" }).click();
+
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+  await expect(page.getByText("Book deleted, but temporary recovery data could not be cleared.")).toBeVisible();
+  await expect(page.locator(".book-card", { hasText: "Delete me safely" })).toHaveCount(0);
 });
 
 test("a superseded slow lookup cannot overwrite the active book", async ({ page }) => {

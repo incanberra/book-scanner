@@ -265,10 +265,11 @@ export async function validateBackupFile(file: File): Promise<BackupPreview> {
 }
 
 export async function replaceCatalogue(preview: BackupPreview): Promise<void> {
-  await bookDatabase.transaction("rw", booksTable, lookupCacheTable, async () => {
+  const settingsTable = bookDatabase.table("settings");
+  await bookDatabase.transaction("rw", booksTable, lookupCacheTable, settingsTable, async () => {
     await booksTable.clear();
     await booksTable.bulkAdd(preview.books);
     await lookupCacheTable.clear();
+    await setSetting("last-backup-imported-at", new Date().toISOString());
   });
-  await setSetting("last-backup-imported-at", new Date().toISOString());
 }
