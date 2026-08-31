@@ -339,6 +339,43 @@ test("Book Check reports lookup failures as unable and never offers Add book", a
   await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
 });
 
+test("Book Check reports authorless metadata as unable and never offers Add book", async ({ page }) => {
+  await mockEditionSeries(page);
+  await page.route("**/search.json?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ docs: [{ edition_key: ["OL-NO-AUTHOR"], title: "Unknown Writer", isbn: [isbn] }] })
+    });
+  });
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Unable to check" })).toBeVisible();
+  await expect(page.getByText("The book was identified, but author information was unavailable.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
+});
+
+test("a cancelled Book Check lookup cannot replace the destination view", async ({ page }) => {
+  await mockEditionSeries(page);
+  await page.route("**/search.json?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ docs: [{ edition_key: ["OL-SLOW"], title: "Slow book", author_name: ["Test Author"], isbn: [isbn] }] })
+    });
+  });
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+  await page.getByRole("button", { name: "Collection", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+  await page.waitForTimeout(1_500);
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Not in your collection" })).toHaveCount(0);
+});
+
 test("primary screens have no serious automated accessibility violations", async ({ page }) => {
   await page.goto("/");
   const scanResults = await new AxeBuilder({ page }).analyze();
