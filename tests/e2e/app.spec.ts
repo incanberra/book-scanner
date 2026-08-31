@@ -339,6 +339,19 @@ test("Book Check reports lookup failures as unable and never offers Add book", a
   await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
 });
 
+test("Book Check reports unidentified ISBNs as unable and never offers Add book", async ({ page }) => {
+  await page.route("**/search.json?**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ docs: [] }) });
+  });
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Unable to check" })).toBeVisible();
+  await expect(page.getByText("Open Library could not identify this ISBN.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
+});
+
 test("Book Check reports authorless metadata as unable and never offers Add book", async ({ page }) => {
   await mockEditionSeries(page);
   await page.route("**/search.json?**", async (route) => {
