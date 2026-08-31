@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 const isbn = "9780140328721";
+const alternateIsbn = "9780061120084";
 
 async function mockEditionSeries(page: Page, series: string[] = []): Promise<void> {
   await page.route(`**/isbn/${isbn}.json`, async (route) => {
@@ -43,6 +44,30 @@ async function addBook(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save book" }).click();
   await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
   await expect(page.getByText("Matilda", { exact: true })).toBeVisible();
+}
+
+async function addManualBook(
+  page: Page,
+  details: { title: string; author: string; isbn: string }
+): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add a book without an ISBN" }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill(details.title);
+  await page.getByLabel(/Authors/).fill(details.author);
+  await page.getByRole("textbox", { name: "ISBN" }).fill(details.isbn);
+  await page.getByRole("button", { name: "Save book" }).click();
+  await expect(page.getByRole("heading", { name: "Your collection" })).toBeVisible();
+}
+
+async function openBookCheck(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Scan", exact: true }).click();
+  await page.getByRole("button", { name: "Book Check", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Book Check" })).toBeVisible();
+}
+
+async function submitBookCheck(page: Page, value = isbn): Promise<void> {
+  await page.getByLabel("Book Check ISBN-10 or ISBN-13").fill(value);
+  await page.getByRole("button", { name: "Check book" }).click();
 }
 
 async function makeDraftCleanupFail(page: Page): Promise<void> {
@@ -218,6 +243,100 @@ test("exports and safely replaces the catalogue from the downloaded backup", asy
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Replace collection" }).click();
   await expect(page.getByText("Collection replaced with 1 books.")).toBeVisible();
+});
+
+test("Book Check is prominent and check another immediately restarts the camera", async ({ page }) => {
+  await addManualBook(page, { title: "Matilda", author: "Roald Dahl", isbn });
+  await openBookCheck(page);
+  await submitBookCheck(page);
+  await expect(page.getByRole("heading", { name: "Already owned" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Check another book" }).click();
+
+  await expect(page.getByText(/Camera access was denied|camera is unavailable/i)).toBeVisible();
+  await expect(page.getByLabel("Book Check ISBN-10 or ISBN-13")).toBeVisible();
+});
+
+test("Book Check finds an exact saved ISBN while offline", async ({ page, context }) => {
+  await addManualBook(page, { title: "Matilda", author: "Roald Dahl", isbn });
+  await context.setOffline(true);
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Already owned" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
+});
+
+test("Book Check finds another edition by normalized title and author", async ({ page }) => {
+  await mockOpenLibrary(page);
+  await addManualBook(page, { title: "MATILDA", author: "Roald Dahl", isbn: alternateIsbn });
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Already owned" })).toBeVisible();
+});
+
+test("an unowned Book Check result can be added and returns to checker scanning", async ({ page }) => {
+  await mockOpenLibrary(page);
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+  await expect(page.getByRole("heading", { name: "Not in your collection" })).toBeVisible();
+  await expect(page.getByLabel("0 books saved")).toBeVisible();
+
+  await page.getByRole("button", { name: "Add book" }).click();
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toHaveValue("Matilda");
+  await expect(page.getByLabel(/Authors/)).toHaveValue("Roald Dahl");
+  await page.getByRole("button", { name: "Save and scan another" }).click();
+
+  await expect(page.getByRole("heading", { name: "Book Check" })).toBeVisible();
+  await expect(page.getByText(/Camera access was denied|camera is unavailable/i)).toBeVisible();
+  await page.getByRole("button", { name: "Collection", exact: true }).click();
+  await expect(page.getByText("Matilda", { exact: true })).toBeVisible();
+});
+
+test("Book Check reports unable instead of unowned when offline", async ({ page, context }) => {
+  await page.goto("/");
+  await context.setOffline(true);
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Unable to check" })).toBeVisible();
+  await expect(page.getByText("Unable to check while offline unless this exact ISBN is already saved.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
+});
+
+test("Book Check waits for an ambiguous edition choice before matching", async ({ page }) => {
+  await mockEditionSeries(page);
+  await page.route("**/search.json?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ docs: [
+        { edition_key: ["OL-FIRST"], title: "Matilda", author_name: ["Roald Dahl"], isbn: [isbn] },
+        { edition_key: ["OL-SECOND"], title: "Matilda: Illustrated", author_name: ["Roald Dahl"], isbn: [isbn] }
+      ] })
+    });
+  });
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Choose the matching edition" })).toBeVisible();
+  await page.locator("[data-checker-candidate='0']").click();
+  await expect(page.getByRole("heading", { name: "Not in your collection" })).toBeVisible();
+});
+
+test("Book Check reports lookup failures as unable and never offers Add book", async ({ page }) => {
+  await page.route("**/search.json?**", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+  await page.goto("/");
+  await openBookCheck(page);
+  await submitBookCheck(page);
+
+  await expect(page.getByRole("heading", { name: "Unable to check" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check a different book" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
 });
 
 test("primary screens have no serious automated accessibility violations", async ({ page }) => {

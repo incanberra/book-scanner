@@ -53,6 +53,12 @@ export interface MetadataCandidate {
   coverUrl?: string;
 }
 
+export interface OwnershipCandidate {
+  isbn13: string;
+  title?: string;
+  authors?: string[];
+}
+
 export interface LookupCacheRecord {
   isbn13: string;
   outcome: "matched" | "not-found";
@@ -132,6 +138,23 @@ export function normaliseKey(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function findOwnedBookMatch(
+  books: readonly Book[],
+  candidate: OwnershipCandidate
+): Book | undefined {
+  const exactIsbnMatch = books.find((book) => book.isbn13 === candidate.isbn13);
+  if (exactIsbnMatch) return exactIsbnMatch;
+
+  const titleKey = candidate.title ? normaliseKey(candidate.title) : "";
+  const authorKeys = (candidate.authors ?? []).map(normaliseKey).filter(Boolean);
+  if (!titleKey || !authorKeys.length) return undefined;
+
+  return books.find((book) => (
+    normaliseKey(book.title) === titleKey
+    && authorKeys.some((authorKey) => book.authorKeys.includes(authorKey))
+  ));
 }
 
 function compactIsbn(value: string): string {

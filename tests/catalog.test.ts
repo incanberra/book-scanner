@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicaliseDraft,
+  findOwnedBookMatch,
   filterBooks,
   groupBooks,
   isApprovedCoverUrl,
@@ -129,5 +130,58 @@ describe("collection selectors", () => {
     expect(filterBooks([collaboration, sequel], "bob")).toEqual([collaboration]);
     expect(filterBooks([collaboration, sequel], "series")).toEqual([sequel]);
     expect(filterBooks([collaboration, sequel], "missing")).toEqual([]);
+  });
+});
+
+describe("owned-book matching", () => {
+  const owned = book({
+    id: "owned",
+    isbn13: "9780061120084",
+    title: "L’Étranger: A Novel",
+    authors: ["Albert Camus", "Translator Name"],
+    authorKeys: ["albert camus", "translator name"]
+  });
+
+  it("matches an exact ISBN without metadata", () => {
+    expect(findOwnedBookMatch([owned], { isbn13: "9780061120084" })).toBe(owned);
+  });
+
+  it("matches another edition with the same normalized title and author", () => {
+    expect(findOwnedBookMatch([owned], {
+      isbn13: "9780141182506",
+      title: "L’Étranger: A Novel",
+      authors: ["Albert Camus"]
+    })).toBe(owned);
+  });
+
+  it("ignores punctuation, case, accents, and spacing", () => {
+    expect(findOwnedBookMatch([owned], {
+      isbn13: "9780141182506",
+      title: "  L'ETRANGER — A NOVEL ",
+      authors: ["ALBERT   CAMUS"]
+    })).toBe(owned);
+  });
+
+  it("does not match the same title with a different author", () => {
+    expect(findOwnedBookMatch([owned], {
+      isbn13: "9780141182506",
+      title: "L’Étranger: A Novel",
+      authors: ["Someone Else"]
+    })).toBeUndefined();
+  });
+
+  it("does not match when author metadata is missing", () => {
+    expect(findOwnedBookMatch([owned], {
+      isbn13: "9780141182506",
+      title: "L’Étranger: A Novel"
+    })).toBeUndefined();
+  });
+
+  it("does not match an unrelated identified book", () => {
+    expect(findOwnedBookMatch([owned], {
+      isbn13: "9780140328721",
+      title: "Matilda",
+      authors: ["Roald Dahl"]
+    })).toBeUndefined();
   });
 });
