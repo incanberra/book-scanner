@@ -14,6 +14,7 @@ import {
   DuplicateBookError,
   emptyDraft,
   filterBooks,
+  findOwnedBookMatch,
   getSetting,
   groupBooks,
   loadActiveDraft,
@@ -35,12 +36,24 @@ import { cancelLookup, lookupBook, lookupSeriesByIsbn } from "./metadata";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
 
-type View = "scan" | "editor" | "collection" | "settings";
+type View = "scan" | "checker" | "editor" | "collection" | "settings";
 type ScanState = "ready" | "starting" | "active" | "lookup" | "ambiguous";
+type CheckerStatus = "ready" | "starting" | "active" | "lookup" | "ambiguous" | "owned" | "not-owned" | "unable";
+type CheckerReason = "offline" | "not-found" | "missing-author" | "failed";
+type EditorOrigin = "scan" | "checker" | "collection";
+
+interface CheckerState {
+  status: CheckerStatus;
+  candidate?: MetadataCandidate;
+  candidates: MetadataCandidate[];
+  reason?: CheckerReason;
+}
 
 interface AppState {
   view: View;
   scanState: ScanState;
+  checker: CheckerState;
+  editorOrigin: EditorOrigin;
   books: Book[];
   draft?: BookDraft;
   recoverableDraft?: BookDraft;
@@ -83,6 +96,8 @@ const root: HTMLDivElement = appElement;
 const state: AppState = {
   view: "scan",
   scanState: "ready",
+  checker: { status: "ready", candidates: [] },
+  editorOrigin: "scan",
   books: [],
   candidates: [],
   query: "",
@@ -97,6 +112,7 @@ const state: AppState = {
 };
 
 let scannerSession: ScannerSession | undefined;
+let cameraOperationId = 0;
 let draftTimer: number | undefined;
 let undoTimer: number | undefined;
 let deferredInstall: BeforeInstallPromptEvent | undefined;
@@ -130,10 +146,16 @@ function announceRuntimeMessage(tone: NonNullable<AppState["message"]>["tone"], 
   document.querySelector(".topbar, .editor-bar")?.insertAdjacentElement("afterend", notice);
 }
 
+function resetChecker(): void {
+  state.checker = { status: "ready", candidates: [] };
+}
+
 function stopScanner(): void {
+  cameraOperationId += 1;
   scannerSession?.stop();
   scannerSession = undefined;
   if (state.scanState === "active" || state.scanState === "starting") state.scanState = "ready";
+  if (state.checker.status === "active" || state.checker.status === "starting") state.checker.status = "ready";
 }
 
 function navigation(view: View): void {
@@ -141,6 +163,7 @@ function navigation(view: View): void {
   cancelLookup();
   state.view = view;
   state.scanState = "ready";
+  resetChecker();
   state.candidates = [];
   state.message = undefined;
   render();
@@ -202,9 +225,16 @@ function scanView(): string {
       </section>`
     : "";
 
+  const checkerEntry = state.scanState === "ready"
+    ? `<button class="checker-launch" data-action="open-checker" aria-label="Book Check">
+        <span class="checker-launch__icon" aria-hidden="true">✓</span>
+        <span><strong>Book Check</strong><small>See if you already own a book before buying it</small></span>
+      </button>`
+    : "";
+
   return `${topBar("Scan a book", "Your private shelf")}${statusMarkup()}${recover}
     <main id="main-content" class="content scan-content">
-      ${camera}${progress}${ambiguous}
+      ${camera}${checkerEntry}${progress}${ambiguous}
       <section class="manual-card">
         <div><p class="eyebrow">Can’t scan it?</p><h2>Enter the ISBN</h2></div>
         <form id="isbn-form" class="inline-form">
@@ -216,6 +246,70 @@ function scanView(): string {
       </section>
       <aside class="privacy-note"><span aria-hidden="true">◉</span><p><strong>Private by default</strong><br />Your catalogue stays on this device. Only a decoded ISBN is sent for lookup.</p></aside>
     </main>`;
+}
+
+function checkerView(): string {
+  const status = state.checker.status;
+  const camera = status === "starting" || status === "active"
+    ? `<div class="camera-shell">
+        <video id="camera-preview" muted playsinline aria-label="Rear camera barcode preview"></video>
+        <div class="scan-guide" aria-hidden="true"><span></span></div>
+        <div class="camera-actions">
+          <button class="button button--ghost-on-dark" data-action="stop-checker-camera">Cancel</button>
+          <button class="button button--ghost-on-dark is-hidden" data-action="toggle-torch">Torch</button>
+        </div>
+      </div>`
+    : status === "ready"
+      ? `<button class="scan-launch" data-action="start-checker-camera">
+          <span class="scan-launch__icon" aria-hidden="true">✓</span>
+          <span><strong>Scan to check</strong><small>Point your rear camera at the ISBN barcode</small></span>
+        </button>`
+      : "";
+
+  const progress = status === "lookup"
+    ? `<div class="lookup-progress" role="status"><span class="spinner" aria-hidden="true"></span><div><strong>Checking your collection…</strong><p>Identifying this edition and comparing it with your saved books.</p></div></div>`
+    : "";
+
+  const ambiguous = status === "ambiguous"
+    ? `<section class="candidate-panel"><h2>Choose the matching edition</h2><p>We found more than one exact-ISBN candidate and won’t guess.</p>${state.checker.candidates.map((candidate, index) => `
+        <button class="candidate" data-checker-candidate="${index}">
+          <span class="candidate__cover">${candidate.coverUrl ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" referrerpolicy="no-referrer" />` : "▥"}</span>
+          <span><strong>${escapeHtml(candidate.title)}</strong><small>${escapeHtml(candidate.authors.join(", ") || "Unknown author")}</small><small>${escapeHtml([candidate.publisher, candidate.publishedDate].filter(Boolean).join(" · "))}</small></span>
+        </button>`).join("")}
+      </section>`
+    : "";
+
+  const result = status === "owned"
+    ? `<section class="checker-result checker-result--owned" role="status"><span class="checker-result__icon" aria-hidden="true">✓</span><h2>Already owned</h2><button class="button button--wide" data-action="check-another">Check another book</button></section>`
+    : status === "not-owned"
+      ? `<section class="checker-result checker-result--not-owned" role="status"><span class="checker-result__icon" aria-hidden="true">＋</span><h2>Not in your collection</h2><div class="checker-result__actions"><button class="button button--wide" data-action="add-checked-book">Add book</button><button class="button button--wide button--secondary" data-action="check-another">Check another book</button></div></section>`
+      : status === "unable"
+        ? `<section class="checker-result checker-result--unable" role="status"><span class="checker-result__icon" aria-hidden="true">?</span><h2>Unable to check</h2><p>${escapeHtml(checkerReasonText(state.checker.reason))}</p><button class="button button--wide" data-action="check-another">Check a different book</button></section>`
+        : "";
+
+  const manual = ["ready", "starting", "active", "lookup"].includes(status)
+    ? `<section class="manual-card">
+        <div><p class="eyebrow">Can’t scan it?</p><h2>Enter the ISBN</h2></div>
+        <form id="checker-isbn-form" class="inline-form">
+          <label class="sr-only" for="checker-manual-isbn">Book Check ISBN-10 or ISBN-13</label>
+          <input id="checker-manual-isbn" name="isbn" inputmode="numeric" autocomplete="off" placeholder="978…" ${status === "lookup" ? "disabled" : ""} />
+          <button class="button" type="submit" ${status === "lookup" ? "disabled" : ""}>Check book</button>
+        </form>
+      </section>`
+    : "";
+
+  return `${topBar("Book Check", "Before you buy")}${statusMarkup()}
+    <main id="main-content" class="content scan-content checker-content">
+      ${camera}${progress}${ambiguous}${result}${manual}
+      ${status === "ready" ? `<aside class="privacy-note"><span aria-hidden="true">◉</span><p><strong>Check without changing your shelf</strong><br />No book is added unless you choose Add book and save it.</p></aside>` : ""}
+    </main>`;
+}
+
+function checkerReasonText(reason?: CheckerReason): string {
+  if (reason === "offline") return "Unable to check while offline unless this exact ISBN is already saved.";
+  if (reason === "not-found") return "Open Library could not identify this ISBN.";
+  if (reason === "missing-author") return "The book was identified, but author information was unavailable.";
+  return "Book information could not be retrieved. Please try again.";
 }
 
 function input(name: keyof BookDraft, label: string, value?: string, options = ""): string {
@@ -339,7 +433,7 @@ function settingsView(): string {
 function bottomNav(): string {
   if (state.view === "editor") return "";
   return `<nav class="bottom-nav" aria-label="Main navigation">
-    <button data-nav="scan" aria-current="${state.view === "scan" ? "page" : "false"}"><span aria-hidden="true">▣</span>Scan</button>
+    <button data-nav="scan" aria-current="${state.view === "scan" || state.view === "checker" ? "page" : "false"}"><span aria-hidden="true">▣</span>Scan</button>
     <button data-nav="collection" aria-current="${state.view === "collection" ? "page" : "false"}"><span aria-hidden="true">▥</span>Collection</button>
     <button data-nav="settings" aria-current="${state.view === "settings" ? "page" : "false"}"><span aria-hidden="true">⚙</span>Settings</button>
   </nav>`;
@@ -352,13 +446,26 @@ function undoMarkup(): string {
 }
 
 function render(): void {
-  const view = state.view === "scan" ? scanView() : state.view === "editor" ? editorView() : state.view === "collection" ? collectionView() : settingsView();
+  const view = state.view === "scan"
+    ? scanView()
+    : state.view === "checker"
+      ? checkerView()
+      : state.view === "editor"
+        ? editorView()
+        : state.view === "collection"
+          ? collectionView()
+          : settingsView();
   root.innerHTML = `<div class="app-shell">${view}${bottomNav()}${undoMarkup()}</div>`;
   bindEvents();
 }
 
 function renderOutsideEditor(): void {
-  if (state.view !== "editor" || !document.querySelector("#book-form")) render();
+  const cameraInProgress = Boolean(scannerSession)
+    || state.scanState === "starting"
+    || state.scanState === "active"
+    || state.checker.status === "starting"
+    || state.checker.status === "active";
+  if (!cameraInProgress && (state.view !== "editor" || !document.querySelector("#book-form"))) render();
 }
 
 function readDraftForm(): BookDraft | undefined {
@@ -399,6 +506,7 @@ async function beginLookup(isbnInput: string): Promise<void> {
     const duplicate = state.books.find((book) => book.isbn13 === isbn13);
     if (duplicate) {
       state.draft = bookToDraft(duplicate);
+      state.editorOrigin = "scan";
       state.view = "editor";
       setMessage("info", "Already in your collection — opening the saved book.");
       await saveActiveDraft(state.draft);
@@ -436,10 +544,90 @@ async function beginLookup(isbnInput: string): Promise<void> {
   }
 }
 
-function openEditor(draft: BookDraft): void {
+async function evaluateCheckerCandidate(candidate: MetadataCandidate): Promise<void> {
+  try {
+    const books = await booksTable.toArray();
+    if (state.view !== "checker") return;
+    state.books = books;
+    state.checker.candidates = [];
+    state.message = undefined;
+    const owned = findOwnedBookMatch(books, candidate);
+    if (!owned && !candidate.authors.length) {
+      state.checker = { status: "unable", candidates: [], reason: "missing-author" };
+      render();
+      return;
+    }
+    state.checker = {
+      status: owned ? "owned" : "not-owned",
+      candidate,
+      candidates: []
+    };
+    render();
+  } catch {
+    if (state.view !== "checker") return;
+    state.checker = { status: "unable", candidates: [], reason: "failed" };
+    render();
+  }
+}
+
+async function beginCheckerLookup(isbnInput: string): Promise<void> {
+  try {
+    stopScanner();
+    cancelLookup();
+    const isbn13 = normaliseIsbn(isbnInput);
+    if (!isbn13) throw new ValidationError("Enter an ISBN first.");
+    state.message = undefined;
+
+    const books = await booksTable.toArray();
+    if (state.view !== "checker") return;
+    state.books = books;
+    if (findOwnedBookMatch(books, { isbn13 })) {
+      state.checker = { status: "owned", candidates: [] };
+      render();
+      return;
+    }
+    if (!navigator.onLine) {
+      state.checker = { status: "unable", candidates: [], reason: "offline" };
+      render();
+      return;
+    }
+
+    state.checker = { status: "lookup", candidates: [] };
+    render();
+    const result = await lookupBook(isbn13);
+    if (result.kind === "cancelled") return;
+    if (result.kind === "matched") {
+      await evaluateCheckerCandidate(result.candidate);
+    } else if (result.kind === "ambiguous") {
+      state.checker = { status: "ambiguous", candidates: result.candidates };
+      state.message = undefined;
+      render();
+    } else {
+      state.checker = {
+        status: "unable",
+        candidates: [],
+        reason: result.kind === "offline" ? "offline" : result.kind === "not-found" ? "not-found" : "failed"
+      };
+      state.message = undefined;
+      render();
+    }
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      resetChecker();
+      setMessage("error", error.message);
+    } else {
+      state.checker = { status: "unable", candidates: [], reason: "failed" };
+      state.message = undefined;
+    }
+    render();
+  }
+}
+
+function openEditor(draft: BookDraft, origin: EditorOrigin = state.view === "checker" ? "checker" : state.view === "collection" ? "collection" : "scan"): void {
   stopScanner();
   cancelLookup();
   state.draft = draft;
+  state.editorOrigin = origin;
   state.draftDirty = false;
   state.recoverableDraft = undefined;
   state.view = "editor";
@@ -450,20 +638,28 @@ function openEditor(draft: BookDraft): void {
   render();
 }
 
-async function startCamera(): Promise<void> {
-  state.scanState = "starting";
+async function startCamera(mode: "scan" | "checker" = "scan"): Promise<void> {
+  const operationId = ++cameraOperationId;
+  if (mode === "checker") state.checker.status = "starting";
+  else state.scanState = "starting";
   setMessage("info", "Starting the rear camera…");
   render();
   const video = document.querySelector<HTMLVideoElement>("#camera-preview");
   if (!video) return;
   try {
-    scannerSession = await startScanner(
+    const session = await startScanner(
       video,
-      (isbn) => void beginLookup(isbn),
+      (isbn) => void (mode === "checker" ? beginCheckerLookup(isbn) : beginLookup(isbn)),
       (message) => announceRuntimeMessage("warning", message),
       (message) => announceRuntimeMessage("error", message)
     );
-    state.scanState = "active";
+    if (operationId !== cameraOperationId || state.view !== mode) {
+      session.stop();
+      return;
+    }
+    scannerSession = session;
+    if (mode === "checker") state.checker.status = "active";
+    else state.scanState = "active";
     setMessage("info", "Hold the barcode inside the frame.");
     render();
     const replacementVideo = document.querySelector<HTMLVideoElement>("#camera-preview");
@@ -474,7 +670,9 @@ async function startCamera(): Promise<void> {
       shell?.querySelector<HTMLButtonElement>("[data-action='toggle-torch']")?.classList.toggle("is-hidden", !scannerSession.hasTorch);
     }
   } catch (error) {
-    state.scanState = "ready";
+    if (operationId !== cameraOperationId || state.view !== mode) return;
+    if (mode === "checker") state.checker.status = "ready";
+    else state.scanState = "ready";
     setMessage("error", error instanceof Error ? error.message : "The camera is unavailable.");
     render();
   }
@@ -520,6 +718,12 @@ async function submitBook(scanNext = false): Promise<void> {
       : `Saved “${book.title}”, but temporary recovery data could not be cleared. Your book is safe.`
   );
   if (scanNext) {
+    if (state.editorOrigin === "checker") {
+      state.view = "checker";
+      resetChecker();
+      void startCamera("checker");
+      return;
+    }
     state.view = "scan";
     state.scanState = "ready";
   } else {
@@ -566,7 +770,7 @@ async function deleteCurrentBook(): Promise<void> {
 
 async function closeEditor(): Promise<void> {
   if (state.draftDirty && !window.confirm("Discard your unsaved changes?")) return;
-  const destination: View = state.draft?.id ? "collection" : "scan";
+  const destination: View = state.draft?.id ? "collection" : state.editorOrigin === "checker" ? "checker" : "scan";
   await clearActiveDraft();
   state.draft = undefined;
   state.draftDirty = false;
@@ -694,6 +898,11 @@ function bindEvents(): void {
     const input = new FormData(event.currentTarget as HTMLFormElement).get("isbn");
     void beginLookup(String(input ?? ""));
   });
+  document.querySelector<HTMLFormElement>("#checker-isbn-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = new FormData(event.currentTarget as HTMLFormElement).get("isbn");
+    void beginCheckerLookup(String(input ?? ""));
+  });
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitBook(false); });
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("input", queueDraftSave);
   document.querySelector<HTMLInputElement>("#collection-search")?.addEventListener("input", (event) => {
@@ -722,12 +931,21 @@ function bindEvents(): void {
     const candidate = state.candidates[Number(element.dataset.candidate)];
     if (candidate) openEditor(candidateToDraft(candidate));
   }));
+  document.querySelectorAll<HTMLElement>("[data-checker-candidate]").forEach((element) => element.addEventListener("click", () => {
+    const candidate = state.checker.candidates[Number(element.dataset.checkerCandidate)];
+    if (candidate) void evaluateCheckerCandidate(candidate);
+  }));
 
   document.querySelectorAll<HTMLElement>("[data-action]").forEach((element) => element.addEventListener("click", () => {
     const action = element.dataset.action;
     if (action === "start-camera") void startCamera();
+    if (action === "open-checker") navigation("checker");
+    if (action === "start-checker-camera") void startCamera("checker");
     if (action === "stop-camera") { stopScanner(); setMessage("info", "Scan cancelled."); render(); }
+    if (action === "stop-checker-camera") { stopScanner(); setMessage("info", "Book Check cancelled."); render(); }
     if (action === "toggle-torch") void scannerSession?.setTorch(true).catch((error) => announceRuntimeMessage("warning", error instanceof Error ? error.message : String(error)));
+    if (action === "check-another") { resetChecker(); state.message = undefined; void startCamera("checker"); }
+    if (action === "add-checked-book" && state.checker.candidate) openEditor(candidateToDraft(state.checker.candidate), "checker");
     if (action === "add-without-isbn") openEditor(emptyDraft());
     if (action === "manual-from-ambiguous") openEditor(emptyDraft(state.candidates[0]?.isbn13));
     if (action === "recover-draft" && state.recoverableDraft) { openEditor(state.recoverableDraft); state.draftDirty = true; }
@@ -762,9 +980,15 @@ window.addEventListener("beforeinstallprompt", (event) => {
 window.addEventListener("online", renderOutsideEditor);
 window.addEventListener("offline", renderOutsideEditor);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && scannerSession) {
+  const cameraInProgress = Boolean(scannerSession)
+    || state.scanState === "starting"
+    || state.scanState === "active"
+    || state.checker.status === "starting"
+    || state.checker.status === "active";
+  if (document.hidden && cameraInProgress) {
     stopScanner();
     setMessage("info", "Camera stopped while the app was in the background.");
+    render();
   }
 });
 window.addEventListener("bookscanner:database-updated", () => {
@@ -785,7 +1009,14 @@ initialisePwa({
 });
 
 observeBooks((books) => {
+  const previousBooks = new Map(state.books.map((book) => [book.id, book.updatedAt]));
+  const catalogueChanged = books.length !== state.books.length
+    || books.some((book) => previousBooks.get(book.id) !== book.updatedAt);
   state.books = books;
+  if (catalogueChanged && state.view === "checker" && ["owned", "not-owned"].includes(state.checker.status)) {
+    resetChecker();
+    setMessage("info", "Your collection changed. Check the book again.");
+  }
   renderOutsideEditor();
 });
 
