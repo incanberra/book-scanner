@@ -460,7 +460,12 @@ function render(): void {
 }
 
 function renderOutsideEditor(): void {
-  if (state.view !== "editor" || !document.querySelector("#book-form")) render();
+  const cameraInProgress = Boolean(scannerSession)
+    || state.scanState === "starting"
+    || state.scanState === "active"
+    || state.checker.status === "starting"
+    || state.checker.status === "active";
+  if (!cameraInProgress && (state.view !== "editor" || !document.querySelector("#book-form"))) render();
 }
 
 function readDraftForm(): BookDraft | undefined {
@@ -539,32 +544,44 @@ async function beginLookup(isbnInput: string): Promise<void> {
   }
 }
 
-function evaluateCheckerCandidate(candidate: MetadataCandidate): void {
-  state.checker.candidates = [];
-  state.message = undefined;
-  if (!candidate.authors.length) {
-    state.checker = { status: "unable", candidates: [], reason: "missing-author" };
+async function evaluateCheckerCandidate(candidate: MetadataCandidate): Promise<void> {
+  try {
+    const books = await booksTable.toArray();
+    if (state.view !== "checker") return;
+    state.books = books;
+    state.checker.candidates = [];
+    state.message = undefined;
+    const owned = findOwnedBookMatch(books, candidate);
+    if (!owned && !candidate.authors.length) {
+      state.checker = { status: "unable", candidates: [], reason: "missing-author" };
+      render();
+      return;
+    }
+    state.checker = {
+      status: owned ? "owned" : "not-owned",
+      candidate,
+      candidates: []
+    };
     render();
-    return;
+  } catch {
+    if (state.view !== "checker") return;
+    state.checker = { status: "unable", candidates: [], reason: "failed" };
+    render();
   }
-  const owned = findOwnedBookMatch(state.books, candidate);
-  state.checker = {
-    status: owned ? "owned" : "not-owned",
-    candidate,
-    candidates: []
-  };
-  render();
 }
 
 async function beginCheckerLookup(isbnInput: string): Promise<void> {
   try {
-    const isbn13 = normaliseIsbn(isbnInput);
-    if (!isbn13) throw new ValidationError("Enter an ISBN first.");
     stopScanner();
     cancelLookup();
+    const isbn13 = normaliseIsbn(isbnInput);
+    if (!isbn13) throw new ValidationError("Enter an ISBN first.");
     state.message = undefined;
 
-    if (findOwnedBookMatch(state.books, { isbn13 })) {
+    const books = await booksTable.toArray();
+    if (state.view !== "checker") return;
+    state.books = books;
+    if (findOwnedBookMatch(books, { isbn13 })) {
       state.checker = { status: "owned", candidates: [] };
       render();
       return;
@@ -580,7 +597,7 @@ async function beginCheckerLookup(isbnInput: string): Promise<void> {
     const result = await lookupBook(isbn13);
     if (result.kind === "cancelled") return;
     if (result.kind === "matched") {
-      evaluateCheckerCandidate(result.candidate);
+      await evaluateCheckerCandidate(result.candidate);
     } else if (result.kind === "ambiguous") {
       state.checker = { status: "ambiguous", candidates: result.candidates };
       state.message = undefined;
@@ -595,8 +612,13 @@ async function beginCheckerLookup(isbnInput: string): Promise<void> {
       render();
     }
   } catch (error) {
-    resetChecker();
-    setMessage("error", error instanceof Error ? error.message : "Enter a valid book ISBN.");
+    if (error instanceof ValidationError) {
+      resetChecker();
+      setMessage("error", error.message);
+    } else {
+      state.checker = { status: "unable", candidates: [], reason: "failed" };
+      state.message = undefined;
+    }
     render();
   }
 }
@@ -911,7 +933,7 @@ function bindEvents(): void {
   }));
   document.querySelectorAll<HTMLElement>("[data-checker-candidate]").forEach((element) => element.addEventListener("click", () => {
     const candidate = state.checker.candidates[Number(element.dataset.checkerCandidate)];
-    if (candidate) evaluateCheckerCandidate(candidate);
+    if (candidate) void evaluateCheckerCandidate(candidate);
   }));
 
   document.querySelectorAll<HTMLElement>("[data-action]").forEach((element) => element.addEventListener("click", () => {
@@ -958,9 +980,15 @@ window.addEventListener("beforeinstallprompt", (event) => {
 window.addEventListener("online", renderOutsideEditor);
 window.addEventListener("offline", renderOutsideEditor);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && scannerSession) {
+  const cameraInProgress = Boolean(scannerSession)
+    || state.scanState === "starting"
+    || state.scanState === "active"
+    || state.checker.status === "starting"
+    || state.checker.status === "active";
+  if (document.hidden && cameraInProgress) {
     stopScanner();
     setMessage("info", "Camera stopped while the app was in the background.");
+    render();
   }
 });
 window.addEventListener("bookscanner:database-updated", () => {
@@ -981,7 +1009,14 @@ initialisePwa({
 });
 
 observeBooks((books) => {
+  const previousBooks = new Map(state.books.map((book) => [book.id, book.updatedAt]));
+  const catalogueChanged = books.length !== state.books.length
+    || books.some((book) => previousBooks.get(book.id) !== book.updatedAt);
   state.books = books;
+  if (catalogueChanged && state.view === "checker" && ["owned", "not-owned"].includes(state.checker.status)) {
+    resetChecker();
+    setMessage("info", "Your collection changed. Check the book again.");
+  }
   renderOutsideEditor();
 });
 
