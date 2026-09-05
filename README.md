@@ -8,7 +8,7 @@ A private, phone-first progressive web app for scanning ISBN barcodes and keepin
 
 - Rear-camera ISBN scanning with ZXing and complete camera-track cleanup.
 - Book Check scans an ISBN before purchase and tells you whether the same title is already in your collection, including another edition with the same title and author.
-- Front-cover photo fallback after an ISBN is not found, with on-device text recognition, editable search words/title/author, and explicit match confirmation.
+- Live rear-camera cover scanning after an ISBN is not found, with on-device OCR, suggested editable title/author fields, and explicit match confirmation.
 - Exact-edition Open Library lookup with timeout, caching, ambiguity handling, and manual fallback.
 - Local IndexedDB catalogue using Dexie; no account, backend, analytics, or hosted database.
 - Editable book details, multiple authors, series, reading state, favourites, search, and grouping.
@@ -44,20 +44,22 @@ If a lookup returns several possible editions, Book Check asks you to choose the
 - Every ownership decision reads the latest catalogue from IndexedDB rather than relying on an older screen snapshot.
 - If another Book Scanner window changes the catalogue, an existing result is cleared and the book must be checked again.
 - Pending and active camera sessions stop when you cancel, navigate away, or put the app in the background.
-- Catalogue data remains on the device. Only the decoded ISBN or cover-search words are sent to Open Library when identification is required. Cover photos are read locally and are not uploaded or saved. The cover reader downloads its OCR engine and English language data on first use.
+- Catalogue data remains on the device. Only the decoded ISBN or cover-search words are sent to Open Library when identification is required. Cover photos are read locally and are not uploaded or saved. The cover reader downloads its OCR engine and English language data from this app on first use; no external OCR service or API key is used.
 
-## Front-cover fallback
+## Live front-cover scanning
 
 When an ISBN cannot be identified, both Scan and Book Check offer **Scan front cover**.
 
-1. Select **Take cover photo** (rear-camera capture on supported phones) or **Choose photo**.
-2. The app reads English cover text locally with Tesseract.js and searches Open Library automatically.
-3. Review the suggested titles and authors and select the matching book. Even a single result needs confirmation.
-4. If needed, remove promotional text from the detected words or enter **Book title** and **Author** to refine the search. Unreadable photos, no matches, connection failures and cancellation all leave a manual route available.
+1. Allow camera access. The rear-camera preview opens inside the app.
+2. Hold the cover inside the guide, keep the title and author visible, avoid glare and tap **Read cover**. The camera stops once the frame is captured.
+3. The app reads the frame locally, suggests a title and author and searches Open Library. Review and correct the editable fields if needed. If only one field is recognised, the app explains the limited search.
+4. Select **Use this book** only when both the title and author match your cover. The original scanned ISBN is retained. Book Check compares the confirmed title and author with the latest saved catalogue and never saves automatically.
 
-A confirmed result retains the original scanned ISBN. Work-level cover search does not copy a different edition's ISBN, publisher or publication date, and does not create an exact-ISBN metadata cache entry. Cover artwork may represent another edition. Book Check still compares against the latest local catalogue and never saves automatically.
+**Choose image instead**, camera retry and manual entry remain available for permission errors, unreadable covers or failed searches. Cancelling, navigating away or backgrounding the app stops cover scanning. Camera access requires HTTPS or localhost and a supported browser; modern Android Chrome is the primary target.
 
-Cover recognition and catalogue coverage are imperfect, particularly for decorative lettering, glare and non-English covers. Confirm the title and author before continuing. No API key, account or backend is required.
+OCR files are served with the app and downloaded on first use. Cached files may allow later offline reading, but book searches require a connection. Images remain in memory on the device and are not uploaded or saved. English recognition and title/author suggestions can be wrong, especially with decorative lettering, glare or unusual layouts. Work-level artwork can show a different edition; unrelated edition ISBNs, publishers and dates are not copied.
+
+See [implementation diagnosis, validation and the Android phone checklist](docs/live-cover-scanning.md). The automated tests include genuine OCR on synthetic camera frames; physical phone acceptance still needs that checklist.
 
 ## Using the hosted app
 
@@ -78,7 +80,7 @@ Quality checks:
 npm test
 npm run test:e2e
 npm run typecheck
-npm run build
+npm run test:production
 ```
 
 ## GitHub Pages
