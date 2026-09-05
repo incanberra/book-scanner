@@ -1,5 +1,7 @@
 # Live cover scanning
 
+This document describes the default local OCR path. For optional Qwen image uploads, authentication and privacy differences, see [Netlify/OpenRouter setup](netlify-openrouter.md).
+
 ## Diagnosis of the previous feature
 
 The deployed implementation behind PR #3 opened a file picker (`capture="environment"`) instead of an in-app live camera. It did not extract separate title/author values: both fields remained blank and the entire cleaned OCR string became the search query. Marketing text and OCR mistakes could therefore prevent a match.

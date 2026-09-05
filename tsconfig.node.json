@@ -20,6 +20,7 @@
   "include": [
     "vite.config.ts",
     "playwright.config.ts",
-    "playwright.production.config.ts"
+    "playwright.production.config.ts",
+    "netlify/functions/**/*.ts"
   ]
 }

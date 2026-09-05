@@ -1,4 +1,5 @@
 import type { CoverReading } from './cover-text';
+import { aiEndpoint, readCoverAi } from './cover-ai';
 export { cleanCoverText, extractCoverDetails } from './cover-text';
 export type { CoverReading } from './cover-text';
 
@@ -38,5 +39,6 @@ export async function readCover(file: Blob, signal: AbortSignal, progress: (text
   if (!file.type.startsWith('image/')) throw new Error('Choose a photo of the front cover.');
   if (file.size > 20 * 1024 * 1024) throw new Error('This photo is too large. Choose a photo under 20 MB.');
   signal.throwIfAborted();
+  if (aiEndpoint()) return readCoverAi(file, signal, progress);
   return runCoverReader(file, signal, progress);
 }

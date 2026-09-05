@@ -44,7 +44,7 @@ If a lookup returns several possible editions, Book Check asks you to choose the
 - Every ownership decision reads the latest catalogue from IndexedDB rather than relying on an older screen snapshot.
 - If another Book Scanner window changes the catalogue, an existing result is cleared and the book must be checked again.
 - Pending and active camera sessions stop when you cancel, navigate away, or put the app in the background.
-- Catalogue data remains on the device. Only the decoded ISBN or cover-search words are sent to Open Library when identification is required. Cover photos are read locally and are not uploaded or saved. The cover reader downloads its OCR engine and English language data from this app on first use; no external OCR service or API key is used.
+- Catalogue data remains on the device. ISBNs and cover-search words are sent to Open Library when identification is required. Default local OCR does not upload images and downloads its engine and English data from this app. Optional AI mode sends cover images through Netlify to OpenRouter and the selected Qwen provider; its API key remains on the server.
 
 ## Live front-cover scanning
 
@@ -57,7 +57,7 @@ When an ISBN cannot be identified, both Scan and Book Check offer **Scan front c
 
 **Choose image instead**, camera retry and manual entry remain available for permission errors, unreadable covers or failed searches. Cancelling, navigating away or backgrounding the app stops cover scanning. Camera access requires HTTPS or localhost and a supported browser; modern Android Chrome is the primary target.
 
-OCR files are served with the app and downloaded on first use. Cached files may allow later offline reading, but book searches require a connection. Images remain in memory on the device and are not uploaded or saved. English recognition and title/author suggestions can be wrong, especially with decorative lettering, glare or unusual layouts. Work-level artwork can show a different edition; unrelated edition ISBNs, publishers and dates are not copied.
+Local OCR files are served with the app and downloaded on first use. Cached files may allow later offline reading, but book searches require a connection. In local mode, images remain on-device and are not uploaded or saved. Optional AI mode uploads the selected frame. Recognition and title/author suggestions can be wrong. Work-level artwork can show a different edition; unrelated edition ISBNs, publishers and dates are not copied.
 
 See [implementation diagnosis, validation and the Android phone checklist](docs/live-cover-scanning.md). The automated tests include genuine OCR on synthetic camera frames; physical phone acceptance still needs that checklist.
 
@@ -92,4 +92,6 @@ npm run test:production
 5. Use **Settings → Install app**, or Chrome’s **Add to Home screen** command.
 
 The real-device spike must verify camera permission, rear-camera selection, barcode decode, Open Library lookup, cover fallback, offline reopen, and that the camera indicator turns off after success, cancellation, navigation, and backgrounding.
+# Optional AI cover reading
 
+Use Qwen through a secure Netlify function instead of local OCR. See [Netlify/OpenRouter setup](docs/netlify-openrouter.md). The OpenRouter key stays server-side; a separate private scanner token unlocks each browser session. Cover images leave the device only when AI scanning is enabled. Local OCR remains available.
