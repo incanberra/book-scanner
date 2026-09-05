@@ -13,12 +13,18 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "prepare:ocr": "node scripts/prepare-ocr.mjs",
+    "predev": "npm run prepare:ocr",
+    "prebuild": "npm run prepare:ocr",
+    "test:production": "node scripts/test-production.mjs"
   },
   "dependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
     "@zxing/browser": "latest",
     "dexie": "latest",
-    "tesseract.js": "7.0.0"
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "7.0.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",

@@ -4,6 +4,15 @@ All notable changes to Book Scanner are documented in this file.
 
 ## Unreleased
 
+### Live cover scanner replacement
+
+- Replace the photo-first interaction with an in-app rear-camera preview, guide and Read cover button in both scan modes.
+- Capture and preprocess frames locally; suggest separate editable title/author fields from OCR layout and confidence.
+- Serve pinned OCR worker/core/language assets with the app at root and GitHub Pages subpaths.
+- Terminate OCR workers even during failed startup, and stop camera tracks on capture, cancellation, navigation, backgrounding and late permission responses.
+- Add real development/production OCR checks, failed-asset checks, camera lifecycle tests and an Android acceptance checklist.
+
+
 ### Added
 
 - Offer front-cover scanning when ISBN identification finds no match in Scan and Book Check.

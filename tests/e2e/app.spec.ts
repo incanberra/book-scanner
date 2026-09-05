@@ -348,7 +348,7 @@ test("Book Check reports unidentified ISBNs as unable and never offers Add book"
   await submitBookCheck(page);
 
   await expect(page.getByRole("heading", { name: "Unable to check" })).toBeVisible();
-  await expect(page.getByText("Open Library could not identify this ISBN.")).toBeVisible();
+  await expect(page.getByText("Unable to identify this ISBN.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Add book" })).toHaveCount(0);
 });
 
@@ -398,3 +398,4 @@ test("primary screens have no serious automated accessibility violations", async
   const editorResults = await new AxeBuilder({ page }).analyze();
   expect(editorResults.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""))).toEqual([]);
 });
+

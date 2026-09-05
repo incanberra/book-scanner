@@ -8,3 +8,6 @@ test-results/
 .env.*
 !.env.example
 .gstack/
+
+public/ocr/
+playwright.local.config.ts

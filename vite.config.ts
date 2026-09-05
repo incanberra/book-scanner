@@ -8,6 +8,8 @@ const base = process.env.GITHUB_ACTIONS === "true" && repositoryName
 
 export default defineConfig({
   base,
+  worker: { format: "es" },
+  optimizeDeps: { include: ["tesseract.js", "@zxing/browser"] },
   plugins: [
     VitePWA({
       registerType: "prompt",
@@ -45,7 +47,13 @@ export default defineConfig({
       },
       workbox: {
         cleanupOutdatedCaches: true,
-        navigateFallback: "index.html"
+        navigateFallback: "index.html",
+        globIgnores: ["**/ocr/**"],
+        runtimeCaching: [{
+          urlPattern: ({ url }) => url.pathname.includes("/ocr/v1/"),
+          handler: "CacheFirst",
+          options: { cacheName: "book-cover-ocr-v1", expiration: { maxEntries: 20, maxAgeSeconds: 365 * 24 * 60 * 60 } }
+        }]
       }
     })
   ],
@@ -58,3 +66,4 @@ export default defineConfig({
     }
   }
 });
+

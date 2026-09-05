@@ -33,7 +33,8 @@ import {
   ValidationError
 } from "./catalog";
 import { cancelLookup, lookupBook, lookupSeriesByIsbn, searchCoverBooks } from "./metadata";
-import { readCover } from "./cover";
+import { readCover, cleanCoverText } from "./cover";
+import { requestCoverCamera, captureCoverFrame, cameraError, type CoverCamera } from "./cover-camera";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
 
@@ -57,7 +58,8 @@ interface AppState {
   cover?: {
     origin: "scan" | "checker";
     isbn: string;
-    status: "ready" | "reading" | "searching" | "results";
+    status: "ready" | "starting" | "live" | "reading" | "searching" | "results";
+    extractionNotice?: string;
     text: string;
     title: string;
     author: string;
@@ -103,6 +105,10 @@ interface BeforeInstallPromptEvent extends Event {
 const appElement = document.querySelector<HTMLDivElement>("#app");
 if (!appElement) throw new Error("Application root is missing.");
 const root: HTMLDivElement = appElement;
+// Keep manually entered ISBNs outside the rendered DOM. Startup and connectivity
+// observers can render while the user is typing, which would otherwise replace
+// the field before the submit event reads it.
+const manualIsbnValues: Record<string, string> = {};
 
 const state: AppState = {
   view: "scan",
@@ -122,6 +128,9 @@ const state: AppState = {
   backupReminderDismissed: false
 };
 
+let coverCameraSession: CoverCamera | undefined;
+let coverCameraController: AbortController | undefined;
+let coverCameraTimer: number | undefined;
 let coverController: AbortController | undefined;
 let coverOperationId = 0;
 
@@ -209,7 +218,17 @@ function topBar(title: string, eyebrow: string): string {
   </header>`;
 }
 
+function stopCoverCamera(): void {
+  window.clearTimeout(coverCameraTimer);
+  coverCameraController?.abort();
+  coverCameraController = undefined;
+  coverCameraSession?.stop();
+  coverCameraSession = undefined;
+  if (state.cover && ["starting", "live"].includes(state.cover.status)) state.cover.status = "ready";
+}
+
 function stopCover(): void {
+  stopCoverCamera();
   coverOperationId += 1;
   coverController?.abort();
   coverController = undefined;
@@ -219,7 +238,7 @@ function stopCover(): void {
 function coverFallback(): string {
   if (!state.fallbackIsbn) return "";
   return `<section class="manual-card cover-fallback"><p class="eyebrow">Another way to find it</p><h2>Try the front cover</h2>
-    <p>Read the title and author from a photo, then choose the matching book.</p>
+    <p>Point the live camera at the cover to read its title and author.</p>
     <button class="button button--wide" data-action="open-cover">Scan front cover</button>
     <button class="text-button" data-action="cover-manual">Enter details manually</button></section>`;
 }
@@ -232,7 +251,64 @@ function openCover(): void {
   state.cover = { origin, isbn: state.fallbackIsbn, status: "ready", text: "", title: "", author: "", candidates: [] };
   state.view = "cover";
   state.message = undefined;
+  void startCoverCamera();
+}
+
+async function startCoverCamera(): Promise<void> {
+  const cover = state.cover;
+  if (!cover || state.view !== "cover") return;
+  stopCover();
+  const operationId = coverOperationId;
+  cover.status = "starting";
+  cover.candidates = [];
+  setMessage("info", "Starting the rear camera… Allow camera access when asked.");
   render();
+  const controller = new AbortController();
+  coverCameraController = controller;
+  const video = document.querySelector<HTMLVideoElement>("#cover-preview")!;
+  coverCameraTimer = window.setTimeout(() => {
+    if (coverCameraController !== controller) return;
+    stopCover();
+    setMessage("warning", "The camera did not start. Check permission and retry, choose an image, or enter the title and author.");
+    render();
+  }, 30_000);
+  try {
+    const session = await requestCoverCamera(video, controller.signal);
+    if (operationId !== coverOperationId || controller.signal.aborted || state.view !== "cover") { session.stop(); return; }
+    window.clearTimeout(coverCameraTimer);
+    coverCameraSession = session;
+    cover.status = "live";
+    document.querySelector<HTMLButtonElement>("[data-action='read-cover']")?.removeAttribute("disabled");
+    announceRuntimeMessage("info", "Keep the title and author inside the guide, hold still, then tap Read cover.");
+  } catch (error) {
+    if (operationId !== coverOperationId || controller.signal.aborted || state.view !== "cover") return;
+    stopCoverCamera();
+    cover.status = "ready";
+    setMessage("warning", cameraError(error));
+    render();
+  }
+}
+
+async function scanCoverFrame(): Promise<void> {
+  const cover = state.cover;
+  if (!cover || cover.status !== "live") return;
+  const operationId = coverOperationId;
+  try {
+    const frame = captureCoverFrame(document.querySelector<HTMLVideoElement>("#cover-preview")!, document.querySelector<HTMLElement>("#cover-guide")!);
+    stopCoverCamera();
+    cover.status = "reading";
+    state.message = undefined;
+    render();
+    const image = await frame;
+    if (operationId !== coverOperationId || state.view !== "cover") return;
+    await recogniseCover(image);
+  } catch (error) {
+    if (operationId !== coverOperationId || state.view !== "cover") return;
+    stopCoverCamera();
+    cover.status = "ready";
+    setMessage("warning", cameraError(error));
+    render();
+  }
 }
 
 function coverView(): string {
@@ -243,22 +319,26 @@ function coverView(): string {
       ${cover.candidates.length ? `<section class="candidate-panel"><h2>Confirm the title and author</h2><p>Choose only if both match your cover. These may show a different edition’s artwork.</p>
         ${cover.candidates.map((candidate, index) => `<button class="candidate" data-cover-candidate="${index}">
           <span class="candidate__cover" aria-hidden="true">${candidate.coverUrl ? `<img src="${escapeHtml(candidate.coverUrl)}" alt="" referrerpolicy="no-referrer" />` : "▥"}</span>
-          <span><strong>${escapeHtml(candidate.title)}</strong><small>${escapeHtml(candidate.authors.join(", ") || "Unknown author")}</small></span>
+          <span><strong>${escapeHtml(candidate.title)}</strong><small>${escapeHtml(candidate.authors.join(", ") || "Unknown author")}</small><small class="cover-use">Use this book</small></span>
         </button>`).join("")}</section>` : ""}
       <section class="manual-card cover-card">
-        <h2>Photograph the front cover</h2>
-        <p>Fill the photo with the cover, keep it upright and avoid glare. Make sure the title and author are clear.</p>
-        <input class="is-hidden" type="file" id="cover-camera" data-cover-file accept="image/*" capture="environment" aria-label="Take a front cover photo" />
-        <input class="is-hidden" type="file" id="cover-upload" data-cover-file accept="image/*" aria-label="Choose a front cover photo" />
-        <div class="button-row"><button class="button" data-action="cover-photo" ${busy ? "disabled" : ""}>Take cover photo</button>
-          <button class="button button--secondary" data-action="cover-upload" ${busy ? "disabled" : ""}>Choose photo</button></div>
-        <p class="cover-help">Your photo stays on this device. Reading English cover text requires an initial download; book searches need an internet connection.</p>
+        <h2>Point the camera at the front cover</h2>
+        <p>Hold the phone upright. Fit the cover inside the guide, avoid glare and keep the title and author visible.</p>
+        ${["starting", "live"].includes(cover.status) ? `<div class="cover-camera-shell">
+          <video id="cover-preview" autoplay muted playsinline aria-label="Live rear-camera cover preview"></video>
+          <div id="cover-guide" class="cover-guide" aria-hidden="true"></div>
+          </div><div class="button-row"><button class="button" data-action="read-cover" ${cover.status !== "live" ? "disabled" : ""}>Read cover</button>
+          <button class="button button--secondary" data-action="stop-cover-camera">Stop camera</button></div>`
+          : `<button class="button" data-action="start-cover-camera" ${busy ? "disabled" : ""}>${cover.status === "ready" ? "Start camera" : "Scan again"}</button>`}
+        <input class="is-hidden" type="file" id="cover-upload" data-cover-file accept="image/*" aria-label="Choose a front cover image" />
+        <button class="button button--secondary" data-action="cover-upload" ${busy ? "disabled" : ""}>Choose image instead</button>
+        <p class="cover-help">Cover images stay on this device. The reader downloads on first use; searching for books needs an internet connection.</p>
       </section>
       ${busy ? `<div class="lookup-progress" role="status"><span class="spinner" aria-hidden="true"></span><p id="cover-progress">${cover.status === "reading" ? "Reading cover…" : "Searching for the title and author…"}</p></div>` : ""}
       <section class="manual-card cover-card"><h2>Review or refine the search</h2>
-        <p>Remove quotes and promotional text. You can also enter the title and author yourself.</p>
+        <p>${escapeHtml(cover.extractionNotice ?? "You can enter the title and author here if the camera cannot read them.")}</p>
         <form id="cover-search-form" class="cover-form">
-          <label class="field"><span>Words read from the cover</span><textarea name="text" rows="3" maxlength="300" ${busy ? "disabled" : ""}>${escapeHtml(cover.text)}</textarea></label>
+          <label class="field"><span>Words read from the cover</span><textarea name="text" rows="3" maxlength="2000" ${busy ? "disabled" : ""}>${escapeHtml(cover.text)}</textarea></label>
           <label class="field"><span>Book title</span><input name="title" value="${escapeHtml(cover.title)}" maxlength="200" ${busy ? "disabled" : ""} /></label>
           <label class="field"><span>Author</span><input name="author" value="${escapeHtml(cover.author)}" maxlength="150" ${busy ? "disabled" : ""} /></label>
           <p class="cover-help">If you enter a title or author, we search those fields instead of the cover words.</p>
@@ -270,7 +350,7 @@ function coverView(): string {
     </main>`;
 }
 
-async function recogniseCover(file: File): Promise<void> {
+async function recogniseCover(file: Blob): Promise<void> {
   const cover = state.cover;
   if (!cover) return;
   stopCover();
@@ -282,23 +362,36 @@ async function recogniseCover(file: File): Promise<void> {
   cover.text = "";
   cover.title = "";
   cover.author = "";
+  cover.extractionNotice = undefined;
   state.message = undefined;
   render();
   try {
-    const text = await readCover(file, controller.signal, (message) => {
+    const reading = await readCover(file, controller.signal, (message) => {
       if (operationId !== coverOperationId) return;
       const progress = document.querySelector("#cover-progress");
       if (progress) progress.textContent = message;
     });
     if (operationId !== coverOperationId || state.view !== "cover") return;
-    cover.text = text;
-    if (!text) {
+    cover.text = reading.text;
+    cover.title = reading.title;
+    cover.author = reading.author;
+    cover.extractionNotice = reading.uncertain
+      ? "These are suggestions from the cover. Check the title and author and correct any mistakes before choosing a book."
+      : "Check the recognised title and author before choosing a book.";
+    if (!cleanCoverText(reading.text)) {
       cover.status = "ready";
       setMessage("warning", "No readable title or author found. Try a clearer photo or enter them below.");
       render();
       return;
     }
-    await findCoverMatches();
+    if (reading.title && reading.author) await findCoverMatches();
+    else {
+      cover.status = "ready";
+      setMessage("info", reading.title ? "Only a title was identified. Add the author if you can, or search using the title."
+        : reading.author ? "Only an author was identified. Add the title if you can, or search using the author."
+        : "Cover words were read, but the title and author are uncertain. Review the words or enter the details, then search.");
+      render();
+    }
   } catch (error) {
     if (operationId !== coverOperationId || state.view !== "cover") return;
     cover.status = "ready";
@@ -313,16 +406,19 @@ async function findCoverMatches(): Promise<void> {
   const cover = state.cover;
   if (!cover) return;
   if (![cover.text, cover.title, cover.author].some((value) => value.trim())) {
-    setMessage("warning", "Take a cover photo or enter a title and author first.");
+    setMessage("warning", "Read the cover or enter a title and author first.");
     render();
     return;
   }
+  stopCoverCamera();
   const operationId = ++coverOperationId;
   cover.status = "searching";
   cover.candidates = [];
   state.message = undefined;
+  if (cover.title.trim() && !cover.author.trim()) setMessage("info", "Searching by title only. Add the author to narrow the matches.");
+  if (cover.author.trim() && !cover.title.trim()) setMessage("info", "Searching by author only. Add the title to narrow the matches.");
   render();
-  const result = await searchCoverBooks(cover);
+  const result = await searchCoverBooks({ ...cover, text: cleanCoverText(cover.text) });
   if (result.kind === "cancelled" || operationId !== coverOperationId || state.view !== "cover") return;
   cover.status = "results";
   if (result.kind === "ambiguous") {
@@ -450,7 +546,7 @@ function checkerView(): string {
 
 function checkerReasonText(reason?: CheckerReason): string {
   if (reason === "offline") return "Unable to check while offline unless this exact ISBN is already saved.";
-  if (reason === "not-found") return "Open Library could not identify this ISBN.";
+  if (reason === "not-found") return "Unable to identify this ISBN.";
   if (reason === "missing-author") return "The book was identified, but author information was unavailable.";
   return "Book information could not be retrieved. Please try again.";
 }
@@ -589,6 +685,13 @@ function undoMarkup(): string {
 }
 
 function render(): void {
+  // Startup/catalogue/connectivity updates must not erase an ISBN between typing
+  // and tapping Find book. Preserve both fallback entry fields across renders.
+  const isbnValues = ["manual-isbn", "checker-manual-isbn"].map(id => ({
+    id, value: document.querySelector<HTMLInputElement>(`#${id}`)?.value ?? manualIsbnValues[id]
+  }));
+  // A full render replaces the video node, so it must release its stream first.
+  if (coverCameraController) stopCoverCamera();
   const view = state.view === "cover" ? coverView() : state.view === "scan"
     ? scanView()
     : state.view === "checker"
@@ -599,6 +702,18 @@ function render(): void {
           ? collectionView()
           : settingsView();
   root.innerHTML = `<div class="app-shell">${view}${bottomNav()}${undoMarkup()}</div>`;
+  for (const { id, value } of isbnValues) {
+    const field = document.querySelector<HTMLInputElement>(`#${id}`);
+    if (field && value !== undefined) {
+      // A startup render can observe the pre-typing empty node after the user
+      // has already entered a value in a node that is about to be replaced.
+      // Never let that stale empty observation erase the remembered value.
+      const remembered = manualIsbnValues[id] ?? "";
+      const nextValue = value || remembered;
+      field.value = nextValue;
+      manualIsbnValues[id] = nextValue;
+    }
+  }
   bindEvents();
 }
 
@@ -608,6 +723,7 @@ function renderOutsideEditor(): void {
     || state.scanState === "active"
     || state.checker.status === "starting"
     || state.checker.status === "active";
+  if (state.view === "cover" && ["starting", "live"].includes(state.cover?.status ?? "")) return;
   if (!cameraInProgress && (state.view !== "editor" || !document.querySelector("#book-form"))) render();
 }
 
@@ -1081,12 +1197,18 @@ function bindEvents(): void {
   document.querySelector<HTMLFormElement>("#isbn-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = new FormData(event.currentTarget as HTMLFormElement).get("isbn");
-    void beginLookup(String(input ?? ""));
+    void beginLookup(String(input ?? manualIsbnValues["manual-isbn"] ?? ""));
+  });
+  document.querySelector<HTMLInputElement>("#manual-isbn")?.addEventListener("input", (event) => {
+    manualIsbnValues["manual-isbn"] = (event.currentTarget as HTMLInputElement).value;
   });
   document.querySelector<HTMLFormElement>("#checker-isbn-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = new FormData(event.currentTarget as HTMLFormElement).get("isbn");
-    void beginCheckerLookup(String(input ?? ""));
+    void beginCheckerLookup(String(input ?? manualIsbnValues["checker-manual-isbn"] ?? ""));
+  });
+  document.querySelector<HTMLInputElement>("#checker-manual-isbn")?.addEventListener("input", (event) => {
+    manualIsbnValues["checker-manual-isbn"] = (event.currentTarget as HTMLInputElement).value;
   });
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitBook(false); });
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("input", queueDraftSave);
@@ -1124,7 +1246,9 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>("[data-action]").forEach((element) => element.addEventListener("click", () => {
     const action = element.dataset.action;
     if (action === "open-cover") openCover();
-    if (action === "cover-photo") document.querySelector<HTMLInputElement>("#cover-camera")?.click();
+    if (action === "start-cover-camera") void startCoverCamera();
+    if (action === "read-cover") void scanCoverFrame();
+    if (action === "stop-cover-camera") { stopCoverCamera(); setMessage("info", "Camera stopped. Restart it or enter the title and author."); render(); }
     if (action === "cover-upload") document.querySelector<HTMLInputElement>("#cover-upload")?.click();
     if (action === "cancel-cover") {
       const origin = state.cover?.origin ?? "scan";
@@ -1176,6 +1300,12 @@ window.addEventListener("beforeinstallprompt", (event) => {
 window.addEventListener("online", renderOutsideEditor);
 window.addEventListener("offline", renderOutsideEditor);
 document.addEventListener("visibilitychange", () => {
+  if (document.hidden && state.view === "cover") {
+    stopCover();
+    if (state.cover) state.cover.status = "ready";
+    setMessage("info", "Cover scanning stopped while the app was in the background. Restart the camera or enter the title and author.");
+    render();
+  }
   const cameraInProgress = Boolean(scannerSession)
     || state.scanState === "starting"
     || state.scanState === "active"
@@ -1187,7 +1317,9 @@ document.addEventListener("visibilitychange", () => {
     render();
   }
 });
+window.addEventListener("pagehide", stopCover);
 window.addEventListener("bookscanner:database-updated", () => {
+  stopCover();
   stopScanner();
   cancelLookup();
   state.databaseUpdateRequired = true;
