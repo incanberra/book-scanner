@@ -34,6 +34,7 @@ import {
 } from "./catalog";
 import { cancelLookup, lookupBook, lookupSeriesByIsbn, searchCoverBooks } from "./metadata";
 import { readCover, cleanCoverText } from "./cover";
+import { aiEndpoint, configureCoverAi } from "./cover-ai";
 import { requestCoverCamera, captureCoverFrame, cameraError, type CoverCamera } from "./cover-camera";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
@@ -332,7 +333,7 @@ function coverView(): string {
           : `<button class="button" data-action="start-cover-camera" ${busy ? "disabled" : ""}>${cover.status === "ready" ? "Start camera" : "Scan again"}</button>`}
         <input class="is-hidden" type="file" id="cover-upload" data-cover-file accept="image/*" aria-label="Choose a front cover image" />
         <button class="button button--secondary" data-action="cover-upload" ${busy ? "disabled" : ""}>Choose image instead</button>
-        <p class="cover-help">Cover images stay on this device. The reader downloads on first use; searching for books needs an internet connection.</p>
+        <p class="cover-help">${aiEndpoint() ? 'AI mode: Read cover sends this cover image through Netlify to OpenRouter and the Qwen provider. Disable AI in Settings to keep images on-device.' : 'Local OCR: cover images stay on this device. The reader downloads on first use.'} Searching for books needs an internet connection.</p>
       </section>
       ${busy ? `<div class="lookup-progress" role="status"><span class="spinner" aria-hidden="true"></span><p id="cover-progress">${cover.status === "reading" ? "Reading cover…" : "Searching for the title and author…"}</p></div>` : ""}
       <section class="manual-card cover-card"><h2>Review or refine the search</h2>
@@ -483,7 +484,7 @@ function scanView(): string {
         </form>
         <button class="text-button" data-action="add-without-isbn">Add a book without an ISBN</button>
       </section>
-      <aside class="privacy-note"><span aria-hidden="true">◉</span><p><strong>Private by default</strong><br />Your catalogue stays on this device. Only an ISBN or cover search words are sent to Open Library. Cover photos stay on this device.</p></aside>
+      <aside class="privacy-note"><span aria-hidden="true">◉</span><p><strong>Private by default</strong><br />Your catalogue stays on this device. ISBNs and cover search words are sent to Open Library. ${aiEndpoint() ? 'AI cover images are sent through Netlify and OpenRouter.' : 'Local OCR cover photos stay on this device.'}</p></aside>
     </main>`;
 }
 
@@ -664,6 +665,16 @@ function settingsView(): string {
           <button class="button" data-action="backfill-series" ${seriesBackfill?.running || missingSeriesCount === 0 ? "disabled" : ""}>${missingSeriesCount ? `Check ${missingSeriesLabel}` : "No missing series"}</button>
           ${seriesBackfill?.running ? `<button class="button button--secondary" data-action="cancel-series-backfill" ${seriesBackfill.cancelRequested ? "disabled" : ""}>${seriesBackfill.cancelRequested ? "Stopping…" : "Stop"}</button>` : ""}
         </div>
+      </section>
+      <section class="settings-card"><h2>AI cover scanning</h2>
+        <p>Optional: read covers with Qwen through OpenRouter. When enabled, each Read cover action sends the cover image through your Netlify function to OpenRouter and its model provider. Check the suggested title and author before choosing a book.</p>
+        <p>The endpoint is remembered on this device. The scanner token stays in memory only; enter it again after reloading. Never enter your OpenRouter API key here.</p>
+        <form id="cover-ai-settings">
+          <label class="field"><span>Netlify scanner endpoint</span><input name="endpoint" type="url" value="${escapeHtml(aiEndpoint())}" placeholder="https://YOUR-SITE.netlify.app/.netlify/functions/read-cover" required /></label>
+          <label class="field"><span>Scanner access token</span><input name="token" type="password" autocomplete="off" minlength="32" maxlength="256" required /></label>
+          <button class="button" type="submit">Enable AI for this session</button>
+          <button class="button button--secondary" type="button" id="disable-cover-ai">Use local OCR instead</button>
+        </form>
       </section>
       <section class="settings-card"><h2>Book information</h2><p>New ISBN lookups use <a href="https://openlibrary.org" target="_blank" rel="noreferrer">Open Library</a>. Saved book facts remain available without it.</p></section>
     </main>`;
@@ -1164,6 +1175,20 @@ async function backfillMissingSeries(): Promise<void> {
 }
 
 function bindEvents(): void {
+  document.querySelector<HTMLFormElement>('#cover-ai-settings')?.addEventListener('submit', event => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    try {
+      configureCoverAi(String(data.get('endpoint') ?? ''), String(data.get('token') ?? ''));
+      form.reset();
+      setMessage('success', 'AI cover scanning enabled for this session. Cover images will be sent through Netlify and OpenRouter.');
+      render();
+    } catch (error) { setMessage('error', error instanceof Error ? error.message : 'Invalid AI settings.'); render(); }
+  });
+  document.querySelector('#disable-cover-ai')?.addEventListener('click', () => {
+    configureCoverAi('', ''); setMessage('info', 'Local OCR enabled. Cover images stay on this device.'); render();
+  });
   document.querySelectorAll<HTMLInputElement>("[data-cover-file]").forEach((input) => input.addEventListener("change", () => {
     const file = input.files?.[0];
     if (file) void recogniseCover(file);
