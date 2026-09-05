@@ -188,6 +188,60 @@ export function cancelLookup(): void {
   activeController = undefined;
 }
 
+export interface CoverQuery { text: string; title: string; author: string }
+
+/** Work-level matches must be confirmed; never assign an unrelated edition's ISBN. */
+export async function searchCoverBooks(
+  query: CoverQuery,
+  fetcher: typeof fetch = fetch,
+  requestIntervalMs = REQUEST_INTERVAL_MS
+): Promise<LookupResult> {
+  cancelLookup();
+  const operationId = operationSequence;
+  if (!navigator.onLine) return { kind: "offline" };
+  const params = new URLSearchParams({ fields: "key,title,author_name,cover_i", limit: "6" });
+  if (query.title.trim()) params.set("title", query.title.trim());
+  if (query.author.trim()) params.set("author", query.author.trim());
+  if (!query.title.trim() && !query.author.trim()) params.set("q", query.text.trim());
+  if (!query.title.trim() && !query.author.trim() && !query.text.trim()) return { kind: "not-found" };
+  const controller = new AbortController();
+  activeController = controller;
+  let timeout: number | undefined;
+  try {
+    await waitForRequestSlot(requestIntervalMs);
+    if (operationId !== operationSequence) return { kind: "cancelled" };
+    timeout = window.setTimeout(() => controller.abort(), 8_000);
+    const response = await fetcher(`https://openlibrary.org/search.json?${params}`, {
+      signal: controller.signal, headers: { Accept: "application/json" }
+    });
+    if (response.status === 429) return { kind: "failed", message: "Open Library is busy. Wait a moment and try searching again." };
+    if (!response.ok) throw new Error("Search failed");
+    const payload = await response.json() as OpenLibraryResponse;
+    if (operationId !== operationSequence) return { kind: "cancelled" };
+    const seen = new Set<string>();
+    const candidates: MetadataCandidate[] = [];
+    for (const document of payload.docs ?? []) {
+      const title = stringValue(document.title);
+      const authors = (document.author_name ?? []).map((name) => name.trim()).filter(Boolean);
+      const key = document.key ?? `${title}|${authors.join("|")}`;
+      if (!title || seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        title, authors, isbn13: "",
+        coverUrl: document.cover_i ? `https://covers.openlibrary.org/b/id/${document.cover_i}-M.jpg` : undefined
+      });
+    }
+    // Even one result is a suggestion, not an exact-ISBN match.
+    return candidates.length ? { kind: "ambiguous", candidates: candidates.slice(0, 6) } : { kind: "not-found" };
+  } catch {
+    if (operationId !== operationSequence) return { kind: "cancelled" };
+    return { kind: "failed", message: "Cover search could not finish. Check your connection and try again, or enter the details manually." };
+  } finally {
+    window.clearTimeout(timeout);
+    if (activeController === controller) activeController = undefined;
+  }
+}
+
 export async function lookupSeriesByIsbn(
   isbnInput: string,
   fetcher: typeof fetch = fetch,
