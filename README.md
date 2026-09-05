@@ -8,6 +8,7 @@ A private, phone-first progressive web app for scanning ISBN barcodes and keepin
 
 - Rear-camera ISBN scanning with ZXing and complete camera-track cleanup.
 - Book Check scans an ISBN before purchase and tells you whether the same title is already in your collection, including another edition with the same title and author.
+- Front-cover photo fallback after an ISBN is not found, with on-device text recognition, editable search words/title/author, and explicit match confirmation.
 - Exact-edition Open Library lookup with timeout, caching, ambiguity handling, and manual fallback.
 - Local IndexedDB catalogue using Dexie; no account, backend, analytics, or hosted database.
 - Editable book details, multiple authors, series, reading state, favourites, search, and grouping.
@@ -43,7 +44,20 @@ If a lookup returns several possible editions, Book Check asks you to choose the
 - Every ownership decision reads the latest catalogue from IndexedDB rather than relying on an older screen snapshot.
 - If another Book Scanner window changes the catalogue, an existing result is cleared and the book must be checked again.
 - Pending and active camera sessions stop when you cancel, navigate away, or put the app in the background.
-- Catalogue data remains on the device. Only the decoded ISBN is sent to Open Library when identification is required.
+- Catalogue data remains on the device. Only the decoded ISBN or cover-search words are sent to Open Library when identification is required. Cover photos are read locally and are not uploaded or saved. The cover reader downloads its OCR engine and English language data on first use.
+
+## Front-cover fallback
+
+When an ISBN cannot be identified, both Scan and Book Check offer **Scan front cover**.
+
+1. Select **Take cover photo** (rear-camera capture on supported phones) or **Choose photo**.
+2. The app reads English cover text locally with Tesseract.js and searches Open Library automatically.
+3. Review the suggested titles and authors and select the matching book. Even a single result needs confirmation.
+4. If needed, remove promotional text from the detected words or enter **Book title** and **Author** to refine the search. Unreadable photos, no matches, connection failures and cancellation all leave a manual route available.
+
+A confirmed result retains the original scanned ISBN. Work-level cover search does not copy a different edition's ISBN, publisher or publication date, and does not create an exact-ISBN metadata cache entry. Cover artwork may represent another edition. Book Check still compares against the latest local catalogue and never saves automatically.
+
+Cover recognition and catalogue coverage are imperfect, particularly for decorative lettering, glare and non-English covers. Confirm the title and author before continuing. No API key, account or backend is required.
 
 ## Using the hosted app
 
@@ -76,3 +90,4 @@ npm run build
 5. Use **Settings → Install app**, or Chrome’s **Add to Home screen** command.
 
 The real-device spike must verify camera permission, rear-camera selection, barcode decode, Open Library lookup, cover fallback, offline reopen, and that the camera indicator turns off after success, cancellation, navigation, and backgrounding.
+

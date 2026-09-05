@@ -187,3 +187,10 @@ textarea { resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+/* Cover fallback uses the existing mobile card and button system. */
+.cover-card, .cover-fallback, .cover-form { display: grid; gap: 14px; }
+.cover-card p, .cover-fallback p { margin: 0; }
+.cover-help { font-size: 0.85rem; line-height: 1.5; color: var(--muted, #565e56); }
+.cover-form textarea { width: 100%; min-height: 90px; resize: vertical; }
+.cover-card .button-row { flex-wrap: wrap; }
+

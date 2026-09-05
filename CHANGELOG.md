@@ -2,6 +2,15 @@
 
 All notable changes to Book Scanner are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Offer front-cover scanning when ISBN identification finds no match in Scan and Book Check.
+- Read cover text locally, search Open Library, and require title/author confirmation while retaining the scanned ISBN.
+- Allow photo selection, corrected title/author searches, retries, cancellation and manual entry.
+- Add regression coverage for fallback search, edition safety, Book Check, cancellation and mobile accessibility.
+
 ## [0.2.0.0] - 2026-09-01
 
 ### Added
@@ -16,4 +25,5 @@ All notable changes to Book Scanner are documented in this file.
 - Stop pending and active camera sessions safely when checking is cancelled, the app is backgrounded, or navigation changes.
 - Keep the live camera preview attached during background catalogue and connectivity updates.
 - Read the latest IndexedDB catalogue for each ownership decision and invalidate stale results after cross-window changes.
+
 
