@@ -34,7 +34,7 @@ import {
 } from "./catalog";
 import { cancelLookup, lookupBook, lookupSeriesByIsbn, searchCoverBooks } from "./metadata";
 import { readCover, cleanCoverText } from "./cover";
-import { aiEndpoint, configureCoverAi } from "./cover-ai";
+import { aiEndpoint, aiConfigured, configureCoverAi, DEFAULT_AI_ENDPOINT } from "./cover-ai";
 import { requestCoverCamera, captureCoverFrame, cameraError, type CoverCamera } from "./cover-camera";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
@@ -668,11 +668,10 @@ function settingsView(): string {
       </section>
       <section class="settings-card"><h2>AI cover scanning</h2>
         <p>Optional: read covers with Qwen through OpenRouter. When enabled, each Read cover action sends the cover image through your Netlify function to OpenRouter and its model provider. Check the suggested title and author before choosing a book.</p>
-        <p>The endpoint is remembered on this device. The scanner token stays in memory only; enter it again after reloading. Never enter your OpenRouter API key here.</p>
+        <p>The app is already connected to its secure scanner service. Enter your scanner access token once; it is remembered on this device. Never enter your OpenRouter API key here.</p>
         <form id="cover-ai-settings">
-          <label class="field"><span>Netlify scanner endpoint</span><input name="endpoint" type="url" value="${escapeHtml(aiEndpoint())}" placeholder="https://YOUR-SITE.netlify.app/.netlify/functions/read-cover" required /></label>
-          <label class="field"><span>Scanner access token</span><input name="token" type="password" autocomplete="off" minlength="32" maxlength="256" required /></label>
-          <button class="button" type="submit">Enable AI for this session</button>
+          <label class="field"><span>Scanner access token</span><input name="token" type="password" autocomplete="off" minlength="32" maxlength="256" ${aiConfigured() ? 'placeholder="Already saved on this device; leave blank to keep it"' : 'required'} /></label>
+          <button class="button" type="submit">${aiConfigured() ? 'Update AI access' : 'Enable AI cover scanning'}</button>
           <button class="button button--secondary" type="button" id="disable-cover-ai">Use local OCR instead</button>
         </form>
       </section>
@@ -1180,9 +1179,10 @@ function bindEvents(): void {
     const form = event.currentTarget as HTMLFormElement;
     const data = new FormData(form);
     try {
-      configureCoverAi(String(data.get('endpoint') ?? ''), String(data.get('token') ?? ''));
+      const token = String(data.get('token') ?? '');
+      configureCoverAi(DEFAULT_AI_ENDPOINT, token);
       form.reset();
-      setMessage('success', 'AI cover scanning enabled for this session. Cover images will be sent through Netlify and OpenRouter.');
+      setMessage('success', 'AI cover scanning is ready and saved on this device.');
       render();
     } catch (error) { setMessage('error', error instanceof Error ? error.message : 'Invalid AI settings.'); render(); }
   });
