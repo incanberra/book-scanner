@@ -94,4 +94,4 @@ npm run test:production
 The real-device spike must verify camera permission, rear-camera selection, barcode decode, Open Library lookup, cover fallback, offline reopen, and that the camera indicator turns off after success, cancellation, navigation, and backgrounding.
 # Optional AI cover reading
 
-Use Qwen through a secure Netlify function instead of local OCR. See [Netlify/OpenRouter setup](docs/netlify-openrouter.md). The OpenRouter key stays server-side; a separate private scanner token unlocks each browser session. Cover images leave the device only when AI scanning is enabled. Local OCR remains available.
+Use Qwen through a secure Netlify function instead of local OCR. See [Netlify/OpenRouter setup](docs/netlify-openrouter.md). The OpenRouter key stays server-side. The service address is built in; enter the separate scanner token once and the device remembers it across reloads. Cover images leave the device only when AI scanning is enabled. Local OCR remains available.

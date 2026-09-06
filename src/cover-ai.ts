@@ -1,21 +1,25 @@
 import type { CoverReading } from './cover-text';
 
-let accessToken = ''; // Memory only: never catalogue backups, URLs or localStorage.
-export function aiEndpoint(): string { return localStorage.getItem('cover-ai-endpoint') ?? ''; }
+export const DEFAULT_AI_ENDPOINT = 'https://reliable-toffee-4d3853.netlify.app/.netlify/functions/read-cover';
+let accessToken = '';
+try { accessToken = localStorage.getItem('cover-ai-access-token') ?? ''; } catch { /* Local OCR remains usable when storage is unavailable. */ }
+export function aiEndpoint(): string { return aiConfigured() ? DEFAULT_AI_ENDPOINT : ''; }
+export function aiConfigured(): boolean { return accessToken.length >= 32; }
 export function configureCoverAi(endpoint: string, token: string): void {
-  if (!endpoint.trim()) { localStorage.removeItem('cover-ai-endpoint'); accessToken = ''; return; }
+  if (!endpoint.trim()) { localStorage.removeItem('cover-ai-access-token'); accessToken = ''; return; }
   const url = new URL(endpoint.trim());
   if (url.protocol !== 'https:' || !url.hostname.endsWith('.netlify.app') || url.username || url.password || url.search || url.hash || url.pathname !== '/.netlify/functions/read-cover') {
     throw new Error('Use https://YOUR-SITE.netlify.app/.netlify/functions/read-cover');
   }
+  if (!token.trim() && accessToken) return;
   if (token.trim().length < 32 || token.trim().length > 256) throw new Error('Enter your scanner access token (32–256 characters), not your OpenRouter key.');
   if (token.trim().startsWith('sk-or-')) throw new Error('Use the separate scanner access token, not your OpenRouter key.');
-  localStorage.setItem('cover-ai-endpoint', url.href);
+  localStorage.setItem('cover-ai-access-token', token.trim());
   accessToken = token.trim();
 }
 
 export async function readCoverAi(image: Blob, signal: AbortSignal, progress: (s: string) => void): Promise<CoverReading> {
-  if (!accessToken) throw new Error('Unlock AI scanning in Settings with your scanner access token, or disable AI to use local OCR.');
+  if (!accessToken) throw new Error('Enable AI cover scanning in Settings once, or use local OCR.');
   signal.throwIfAborted();
   progress('Preparing cover for AI…');
   const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' });

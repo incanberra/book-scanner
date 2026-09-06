@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fakeCamera, mockBookSearch, openCoverFallback } from '../helpers/cover-browser';
-const endpoint = 'https://book-scanner-test.netlify.app/.netlify/functions/read-cover';
+const endpoint = 'https://reliable-toffee-4d3853.netlify.app/.netlify/functions/read-cover';
 const token = 'test-only-access-token-12345678901234567890';
 test('AI scan sends a compressed camera frame and preserves confirmation and ISBN', async ({ page }) => {
   await fakeCamera(page); await mockBookSearch(page);
@@ -17,11 +17,11 @@ test('AI scan sends a compressed camera frame and preserves confirmation and ISB
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByLabel('Netlify scanner endpoint').fill(endpoint);
+  await expect(page.getByLabel('Netlify scanner endpoint')).toHaveCount(0);
   await page.getByLabel('Scanner access token').fill(token);
-  await page.getByRole('button', { name: 'Enable AI for this session' }).click();
-  await expect(page.getByText('AI cover scanning enabled for this session.', { exact: false })).toBeVisible();
-  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(token);
+  await page.getByRole('button', { name: 'Enable AI cover scanning', exact: true }).click();
+  await expect(page.getByText('AI cover scanning is ready and saved on this device.', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('cover-ai-access-token'))).toBe(token);
   await page.getByRole('button', { name: 'Scan', exact: true }).click();
   await openCoverFallback(page);
   await expect(page.getByText(/AI mode: Read cover sends/)).toBeVisible();
@@ -32,9 +32,12 @@ test('AI scan sends a compressed camera frame and preserves confirmation and ISB
   await page.reload();
   await openCoverFallback(page);
   await page.getByRole('button', { name: 'Read cover', exact: true }).click();
-  await expect(page.getByText(/Unlock AI scanning in Settings/)).toBeVisible();
-  expect(uploads).toBe(1);
+  await expect(page.getByRole('button', { name: /Use this book/ })).toBeVisible();
+  expect(uploads).toBe(2);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Use local OCR instead' }).click();
-  expect(await page.evaluate(() => localStorage.getItem('cover-ai-endpoint'))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('cover-ai-access-token'))).toBeNull();
+  await page.reload();
+  await openCoverFallback(page);
+  await expect(page.getByText(/Local OCR: cover images stay/)).toBeVisible();
 });

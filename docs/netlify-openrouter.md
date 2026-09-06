@@ -16,10 +16,10 @@ No OpenRouter key belongs in GitHub, a VITE_ variable, the browser, or chat.
    | `COVER_ALLOWED_ORIGIN` | `https://incanberra.github.io` (no path or trailing slash) |
 
 3. Deploy/redeploy after setting those values. Confirm the `read-cover` function is deployed. The model is fixed to `qwen/qwen3.7-flash` in server code; clients cannot choose a different model or prompt.
-4. Ensure the frontend integration is deployed to GitHub Pages too. Open Book Scanner there, go to Settings → AI cover scanning. Enter `https://YOUR-SITE.netlify.app/.netlify/functions/read-cover` and your **scanner access token**, not your OpenRouter key. Select Enable AI for this session.
+4. Open the updated GitHub Pages app, go to Settings → AI cover scanning. The reliable-toffee-4d3853 Netlify endpoint is built into the app. Enter your **scanner access token** once and select Enable AI cover scanning. Never enter your OpenRouter key.
 5. Try a failed ISBN lookup → Scan front cover → Read cover. Review the title/author and select the book. The scanned ISBN is retained.
 
-The endpoint is remembered. The access token stays in memory and must be re-entered after reload. Anyone holding that token can use this restricted scanner endpoint and spend your credits: do not share it publicly. Rotate it in Netlify and redeploy if exposed. Disable AI with Use local OCR instead in Settings.
+The scanner token is saved in this browser's localStorage and restored after reload. It is not included in catalogue backups or public code. Scripts running on this origin can access it; use this on your own device. Anyone holding the token can spend credits through this restricted endpoint. Rotate it in Netlify and redeploy if exposed. Use local OCR instead clears the saved token and restores local scanning. Clearing browser storage also requires entering the token again.
 
 ## Security, billing and privacy
 
@@ -36,6 +36,6 @@ Automated tests mock OpenRouter: they validate authentication, origin checks, pa
 
 On the deployed function verify: wrong token → 401; disallowed origin → 403; missing server settings → 503; oversized image → 413; repeated requests → rate limiting. None of these rejected requests should reach OpenRouter. Never put secrets into URLs or copy them into test logs.
 
-Test five or more real covers (including stylised type, glare and a cover the local OCR misreads). Verify readable title/author results, deliberate unknowns, no invented ISBN, cancellation, expiry/reload unlock, offline failure, Book Check, and local fallback. Check OpenRouter request costs and Netlify usage. Image capability does not guarantee accurate book identification.
+Test five or more real covers (including stylised type, glare and a cover the local OCR misreads). Verify readable title/author results, deliberate unknowns, no invented ISBN, cancellation, remembered access after reload, offline failure, Book Check, and local fallback. Check OpenRouter request costs and Netlify usage. Image capability does not guarantee accurate book identification.
 
 References: [Netlify Functions API](https://docs.netlify.com/build/functions/api/), [OpenRouter model](https://openrouter.ai/qwen/qwen3.7-flash), [API authentication](https://openrouter.ai/docs/api_reference/authentication).
