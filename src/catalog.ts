@@ -54,7 +54,7 @@ export interface MetadataCandidate {
 }
 
 export interface OwnershipCandidate {
-  isbn13: string;
+  isbn13?: string;
   title?: string;
   authors?: string[];
 }
@@ -144,7 +144,9 @@ export function findOwnedBookMatch(
   books: readonly Book[],
   candidate: OwnershipCandidate
 ): Book | undefined {
-  const exactIsbnMatch = books.find((book) => book.isbn13 === candidate.isbn13);
+  const exactIsbnMatch = candidate.isbn13
+    ? books.find((book) => book.isbn13 === candidate.isbn13)
+    : undefined;
   if (exactIsbnMatch) return exactIsbnMatch;
 
   const titleKey = candidate.title ? normaliseKey(candidate.title) : "";

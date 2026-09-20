@@ -161,4 +161,13 @@ for (const checker of [false, true]) {
     await page.getByRole('button', { name: checker ? 'Check book' : 'Find book', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Scan front cover', exact: true })).toBeVisible();
   });
+
+  test(`direct front cover scan can be launched anytime from ${checker ? 'Book Check' : 'Scan'}`, async ({ page }) => {
+    if (checker) await page.getByRole('button', { name: 'Book Check', exact: true }).click();
+    await page.locator('.scan-launch--secondary').click();
+    await expect(page.getByLabel('Live rear-camera cover preview')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Read cover', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Cancel cover search' }).click();
+    await expect(page.getByRole('heading', { name: checker ? 'Book Check' : 'Scan a book' })).toBeVisible();
+  });
 }

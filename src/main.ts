@@ -58,7 +58,7 @@ interface AppState {
   fallbackIsbn?: string;
   cover?: {
     origin: "scan" | "checker";
-    isbn: string;
+    isbn?: string;
     status: "ready" | "starting" | "live" | "reading" | "searching" | "results";
     extractionNotice?: string;
     text: string;
@@ -244,9 +244,8 @@ function coverFallback(): string {
     <button class="text-button" data-action="cover-manual">Enter details manually</button></section>`;
 }
 
-function openCover(): void {
-  if (!state.fallbackIsbn) return;
-  const origin = state.view === "checker" ? "checker" : "scan";
+function openCover(forcedOrigin?: "scan" | "checker"): void {
+  const origin = forcedOrigin ?? (state.view === "checker" ? "checker" : "scan");
   stopScanner();
   stopCover();
   state.cover = { origin, isbn: state.fallbackIsbn, status: "ready", text: "", title: "", author: "", candidates: [] };
@@ -443,13 +442,20 @@ function scanView(): string {
         <div class="scan-guide" aria-hidden="true"><span></span></div>
         <div class="camera-actions">
           <button class="button button--ghost-on-dark" data-action="stop-camera">Cancel</button>
+          <button class="button button--ghost-on-dark" data-action="open-cover">Scan cover instead</button>
           <button class="button button--ghost-on-dark is-hidden" data-action="toggle-torch">Torch</button>
         </div>
       </div>`
-    : `<button class="scan-launch" data-action="start-camera">
-        <span class="scan-launch__icon" aria-hidden="true">▣</span>
-        <span><strong>Scan a book</strong><small>Point your rear camera at the ISBN barcode</small></span>
-      </button>`;
+    : `<div class="scan-launch-options">
+        <button class="scan-launch" data-action="start-camera">
+          <span class="scan-launch__icon" aria-hidden="true">▣</span>
+          <span><strong>Scan barcode</strong><small>Point camera at the ISBN barcode</small></span>
+        </button>
+        <button class="scan-launch scan-launch--secondary" data-action="open-cover">
+          <span class="scan-launch__icon" aria-hidden="true">◫</span>
+          <span><strong>Scan front cover</strong><small>Point camera at the front cover</small></span>
+        </button>
+      </div>`;
 
   const progress = state.scanState === "lookup"
     ? `<div class="lookup-progress" role="status"><span class="spinner" aria-hidden="true"></span><div><strong>Finding your book…</strong><p>Checking Open Library for this exact edition.</p></div></div>`
@@ -482,6 +488,7 @@ function scanView(): string {
           <input id="manual-isbn" name="isbn" inputmode="numeric" autocomplete="off" placeholder="978…" ${state.scanState === "lookup" ? "disabled" : ""} />
           <button class="button" type="submit" ${state.scanState === "lookup" ? "disabled" : ""}>Find book</button>
         </form>
+        <button class="text-button" data-action="open-cover">Scan front cover instead</button>
         <button class="text-button" data-action="add-without-isbn">Add a book without an ISBN</button>
       </section>
       <aside class="privacy-note"><span aria-hidden="true">◉</span><p><strong>Private by default</strong><br />Your catalogue stays on this device. ISBNs and cover search words are sent to Open Library. ${aiEndpoint() ? 'AI cover images are sent through Netlify and OpenRouter.' : 'Local OCR cover photos stay on this device.'}</p></aside>
@@ -496,14 +503,21 @@ function checkerView(): string {
         <div class="scan-guide" aria-hidden="true"><span></span></div>
         <div class="camera-actions">
           <button class="button button--ghost-on-dark" data-action="stop-checker-camera">Cancel</button>
+          <button class="button button--ghost-on-dark" data-action="open-checker-cover">Scan cover instead</button>
           <button class="button button--ghost-on-dark is-hidden" data-action="toggle-torch">Torch</button>
         </div>
       </div>`
     : status === "ready"
-      ? `<button class="scan-launch" data-action="start-checker-camera">
-          <span class="scan-launch__icon" aria-hidden="true">✓</span>
-          <span><strong>Scan to check</strong><small>Point your rear camera at the ISBN barcode</small></span>
-        </button>`
+      ? `<div class="scan-launch-options">
+          <button class="scan-launch" data-action="start-checker-camera">
+            <span class="scan-launch__icon" aria-hidden="true">✓</span>
+            <span><strong>Scan barcode</strong><small>Point camera at the ISBN barcode</small></span>
+          </button>
+          <button class="scan-launch scan-launch--secondary" data-action="open-checker-cover">
+            <span class="scan-launch__icon" aria-hidden="true">◫</span>
+            <span><strong>Scan front cover</strong><small>Point camera at the front cover</small></span>
+          </button>
+        </div>`
       : "";
 
   const progress = status === "lookup"
@@ -524,7 +538,7 @@ function checkerView(): string {
     : status === "not-owned"
       ? `<section class="checker-result checker-result--not-owned" role="status"><span class="checker-result__icon" aria-hidden="true">＋</span><h2>Not in your collection</h2><div class="checker-result__actions"><button class="button button--wide" data-action="add-checked-book">Add book</button><button class="button button--wide button--secondary" data-action="check-another">Check another book</button></div></section>`
       : status === "unable"
-        ? `<section class="checker-result checker-result--unable" role="status"><span class="checker-result__icon" aria-hidden="true">?</span><h2>Unable to check</h2><p>${escapeHtml(checkerReasonText(state.checker.reason))}</p><button class="button button--wide" data-action="check-another">Check a different book</button></section>`
+        ? `<section class="checker-result checker-result--unable" role="status"><span class="checker-result__icon" aria-hidden="true">?</span><h2>Unable to check</h2><p>${escapeHtml(checkerReasonText(state.checker.reason))}</p><div class="checker-result__actions"><button class="button button--wide" data-action="open-checker-cover">Scan front cover instead</button><button class="button button--wide button--secondary" data-action="check-another">Check a different book</button></div></section>`
         : "";
 
   const manual = ["ready", "starting", "active", "lookup"].includes(status)
@@ -535,6 +549,7 @@ function checkerView(): string {
           <input id="checker-manual-isbn" name="isbn" inputmode="numeric" autocomplete="off" placeholder="978…" ${status === "lookup" ? "disabled" : ""} />
           <button class="button" type="submit" ${status === "lookup" ? "disabled" : ""}>Check book</button>
         </form>
+        <button class="text-button" data-action="open-checker-cover">Scan front cover instead</button>
       </section>`
     : "";
 
@@ -1209,7 +1224,7 @@ function bindEvents(): void {
     const cover = state.cover;
     const candidate = cover?.candidates[Number(element.dataset.coverCandidate)];
     if (!cover || !candidate) return;
-    const confirmed = { ...candidate, isbn13: cover.isbn };
+    const confirmed = { ...candidate, isbn13: cover.isbn ?? candidate.isbn13 };
     if (cover.origin === "checker") {
       stopCover();
       state.cover = undefined;
@@ -1271,6 +1286,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>("[data-action]").forEach((element) => element.addEventListener("click", () => {
     const action = element.dataset.action;
     if (action === "open-cover") openCover();
+    if (action === "open-checker-cover") openCover("checker");
     if (action === "start-cover-camera") void startCoverCamera();
     if (action === "read-cover") void scanCoverFrame();
     if (action === "stop-cover-camera") { stopCoverCamera(); setMessage("info", "Camera stopped. Restart it or enter the title and author."); render(); }
