@@ -245,6 +245,23 @@ test("exports and safely replaces the catalogue from the downloaded backup", asy
   await expect(page.getByText("Collection replaced with 1 books.")).toBeVisible();
 });
 
+test("exports the collection as a CSV spreadsheet with headers and book data", async ({ page }, testInfo) => {
+  await addBook(page);
+  await page.getByRole("button", { name: "Settings" }).click();
+  const csvDownloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export spreadsheet (CSV)" }).click();
+  const download = await csvDownloadEvent;
+  expect(download.suggestedFilename()).toMatch(/^book-scanner-collection-\d{4}-\d{2}-\d{2}\.csv$/);
+  const csvPath = testInfo.outputPath("collection.csv");
+  await download.saveAs(csvPath);
+  const fs = await import("fs/promises");
+  const content = await fs.readFile(csvPath, "utf-8");
+  expect(content.startsWith("\uFEFF")).toBe(true);
+  expect(content).toContain("Title,Subtitle,Authors,ISBN-13");
+  expect(content).toContain("Matilda");
+  await expect(page.getByText(/Spreadsheet exported \(1 book\)\./)).toBeVisible();
+});
+
 test("Book Check is prominent and check another immediately restarts the camera", async ({ page }) => {
   await addManualBook(page, { title: "Matilda", author: "Roald Dahl", isbn });
   await openBookCheck(page);

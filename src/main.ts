@@ -1,6 +1,8 @@
 import "./styles.css";
 import {
   createBackup,
+  createCsvExport,
+  downloadCsv,
   downloadJson,
   replaceCatalogue,
   validateBackupFile,
@@ -669,9 +671,13 @@ function settingsView(): string {
     <main id="main-content" class="content settings-content">
       <section class="settings-card"><h2>Install Book Scanner</h2><p>Add it to your Android home screen for a full-screen, app-like experience.</p><button class="button" data-action="install-app" ${deferredInstall ? "" : "disabled"}>${deferredInstall ? "Install app" : "Already installed or unavailable"}</button></section>
       <section class="settings-card"><h2>Local storage</h2><p>Your books live in this browser’s IndexedDB storage and work offline. Browser storage is not a backup.</p><button class="button button--secondary" data-action="request-storage">Request persistent storage</button></section>
-      <section class="settings-card"><p class="eyebrow">Portable catalogue</p><h2>Backup and restore</h2><p>Export a JSON copy you can retain outside this browser. Import replaces the complete collection only after validation, a safety export, and confirmation.</p>
+      <section class="settings-card"><p class="eyebrow">Portable catalogue</p><h2>Backup and export</h2><p>Export a CSV spreadsheet to view in Excel or Google Sheets, or a JSON backup to restore on another device. Import replaces the complete collection only after validation, a safety export, and confirmation.</p>
         ${backupReminder}${lastBackup}
-        <div class="button-row"><button class="button" data-action="export-backup">Export collection</button><label class="button button--secondary file-button">Choose backup<input id="backup-file" type="file" accept=".json,application/json" /></label></div>
+        <div class="button-row">
+          <button class="button" data-action="export-csv">Export spreadsheet (CSV)</button>
+          <button class="button button--secondary" data-action="export-backup">Export collection</button>
+          <label class="button button--secondary file-button">Choose backup<input id="backup-file" type="file" accept=".json,application/json" /></label>
+        </div>
         ${preview}
       </section>
       <section class="settings-card"><p class="eyebrow">Catalogue cleanup</p><h2>Find missing series</h2><p>Check exact-edition Open Library records for saved ISBN books. Only books without a series name are updated; your manual series entries are never replaced.</p>
@@ -1074,6 +1080,23 @@ async function closeEditor(): Promise<void> {
   navigation(destination);
 }
 
+async function exportCurrentCsv(): Promise<void> {
+  if (!state.books.length) {
+    setMessage("info", "Your collection is empty. Scan books before exporting a spreadsheet.");
+    render();
+    return;
+  }
+  try {
+    const { csv, filename, count } = await createCsvExport();
+    downloadCsv(csv, filename);
+    setMessage("success", `Spreadsheet exported (${count} ${count === 1 ? "book" : "books"}).`);
+    render();
+  } catch (error) {
+    setMessage("error", error instanceof Error ? error.message : "The spreadsheet could not be exported.");
+    render();
+  }
+}
+
 async function exportCurrentCatalogue(safetyCopy = false): Promise<void> {
   try {
     const backup = await createBackup();
@@ -1320,6 +1343,7 @@ function bindEvents(): void {
     if (action === "apply-update") void state.updateAction?.();
     if (action === "install-app" && deferredInstall) void deferredInstall.prompt().then(() => { deferredInstall = undefined; render(); });
     if (action === "request-storage") void navigator.storage?.persist?.().then((granted) => { setMessage(granted ? "success" : "warning", granted ? "Persistent storage was granted on this device." : "Persistent storage was not granted. Keep a backup once export is available."); render(); });
+    if (action === "export-csv") void exportCurrentCsv();
     if (action === "export-backup") void exportCurrentCatalogue(false);
     if (action === "safety-export") void exportCurrentCatalogue(true);
     if (action === "replace-catalogue") void confirmReplacement();

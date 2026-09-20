@@ -158,6 +158,80 @@ export function downloadJson(json: string, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+export function escapeCsvField(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  const stringValue = String(value);
+  if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n") || stringValue.includes("\r")) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+export const CSV_COLUMNS = [
+  "Title",
+  "Subtitle",
+  "Authors",
+  "ISBN-13",
+  "Series",
+  "Series Number",
+  "Publisher",
+  "Publication Date",
+  "Reading Status",
+  "Favourite",
+  "Cover URL",
+  "Date Added",
+  "Date Updated",
+  "ID"
+] as const;
+
+export function booksToCsv(books: readonly Book[]): string {
+  const header = CSV_COLUMNS.join(",");
+  const rows = books.map((book) => {
+    return [
+      escapeCsvField(book.title),
+      escapeCsvField(book.subtitle ?? ""),
+      escapeCsvField(book.authors.join(", ")),
+      escapeCsvField(book.isbn13 ?? ""),
+      escapeCsvField(book.seriesName ?? ""),
+      escapeCsvField(book.seriesNumber ?? ""),
+      escapeCsvField(book.publisher ?? ""),
+      escapeCsvField(book.publishedDate ?? ""),
+      escapeCsvField(book.readingStatus),
+      escapeCsvField(book.favourite ? "Yes" : "No"),
+      escapeCsvField(book.coverUrl ?? ""),
+      escapeCsvField(book.createdAt),
+      escapeCsvField(book.updatedAt),
+      escapeCsvField(book.id)
+    ].join(",");
+  });
+
+  // Prepend UTF-8 BOM (\uFEFF) for immediate Unicode recognition in Microsoft Excel and spreadsheet tools
+  return `\uFEFF${[header, ...rows].join("\r\n")}\r\n`;
+}
+
+export async function createCsvExport(): Promise<{ csv: string; filename: string; count: number }> {
+  const books = (await booksTable.toArray()).sort((left, right) => left.title.localeCompare(right.title, "en-AU"));
+  const csv = booksToCsv(books);
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  return {
+    csv,
+    filename: `book-scanner-collection-${dateStamp}.csv`,
+    count: books.length
+  };
+}
+
+export function downloadCsv(csv: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
 function validatePortableBook(value: unknown, index: number, warnings: string[]): Book {
   if (!isRecord(value)) throw new ValidationError(`Book ${index + 1} must be an object.`);
   assertExactKeys(value, ALL_BOOK_KEYS, REQUIRED_BOOK_KEYS, `Book ${index + 1}`);
