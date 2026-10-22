@@ -15,10 +15,8 @@ import {
   clearActiveDraft,
   DuplicateBookError,
   emptyDraft,
-  filterBooks,
   findOwnedBookMatch,
   getSetting,
-  groupBooks,
   loadActiveDraft,
   normaliseIsbn,
   observeBooks,
@@ -29,7 +27,6 @@ import {
   setSetting,
   type Book,
   type BookDraft,
-  type GroupMode,
   type MetadataCandidate,
   type ReadingStatus,
   ValidationError
@@ -40,6 +37,8 @@ import { aiEndpoint, aiConfigured, configureCoverAi, DEFAULT_AI_ENDPOINT } from 
 import { requestCoverCamera, captureCoverFrame, cameraError, type CoverCamera } from "./cover-camera";
 import { initialisePwa } from "./pwa";
 import { startScanner, type ScannerSession } from "./scanner";
+import { collectionContent, collectionResults, PAGE_SIZE, type CollectionOptions, type CollectionOrder } from "./collection";
+import { escapeHtml } from "./html";
 
 type View = "cover" | "scan" | "checker" | "editor" | "collection" | "settings";
 type ScanState = "ready" | "starting" | "active" | "lookup" | "ambiguous";
@@ -75,8 +74,7 @@ interface AppState {
   recoverableDraft?: BookDraft;
   candidates: MetadataCandidate[];
   message?: { tone: "info" | "success" | "warning" | "error"; text: string };
-  query: string;
-  groupMode: GroupMode;
+  collection: CollectionOptions;
   offlineReady: boolean;
   updateAction?: () => Promise<void>;
   deletedBook?: Book;
@@ -120,8 +118,7 @@ const state: AppState = {
   editorOrigin: "scan",
   books: [],
   candidates: [],
-  query: "",
-  groupMode: "title",
+  collection: { query: "", order: "title", status: "all", favouritesOnly: false, visibleCount: PAGE_SIZE },
   offlineReady: false,
   draftDirty: false,
   savingBook: false,
@@ -143,13 +140,15 @@ let draftTimer: number | undefined;
 let undoTimer: number | undefined;
 let deferredInstall: BeforeInstallPromptEvent | undefined;
 
-function escapeHtml(value: unknown): string {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+let collectionScrollTop = 0;
+let collectionFocusId: string | undefined;
+
+function restoreCollectionPosition(): void {
+  if (state.view !== "collection") return;
+  const target = [...document.querySelectorAll<HTMLButtonElement>("[data-book]")]
+    .find(button => button.dataset.book === collectionFocusId);
+  target?.focus({ preventScroll: true });
+  window.scrollTo({ top: collectionScrollTop, behavior: "instant" });
 }
 
 function setMessage(tone: NonNullable<AppState["message"]>["tone"], text: string): void {
@@ -185,6 +184,7 @@ function stopScanner(): void {
 }
 
 function navigation(view: View): void {
+  if (state.view === "collection") collectionScrollTop = window.scrollY;
   stopCover();
   state.cover = undefined;
   state.fallbackIsbn = undefined;
@@ -196,6 +196,8 @@ function navigation(view: View): void {
   state.candidates = [];
   state.message = undefined;
   render();
+  if (view === "collection") restoreCollectionPosition();
+  else window.scrollTo({ top: 0, behavior: "instant" });
 }
 
 function statusMarkup(): string {
@@ -610,25 +612,28 @@ function editorView(): string {
 }
 
 function collectionView(): string {
-  const filtered = filterBooks(state.books, state.query);
-  const groups = groupBooks(filtered, state.groupMode);
-  const empty = !state.books.length
-    ? `<section class="empty-state"><span aria-hidden="true">▥</span><h2>Your shelf is empty</h2><p>Scan your first book to start building the collection.</p><button class="button" data-nav="scan">Scan a book</button></section>`
-    : !filtered.length
-      ? `<section class="empty-state"><h2>No books match</h2><p>Try a different title, author, series, or ISBN.</p><button class="text-button" data-action="clear-search">Clear search</button></section>`
-      : groups.map((group) => `<section class="book-group"><h2>${escapeHtml(group.label)} <span>${group.books.length}</span></h2><div class="book-list">${group.books.map((book) => `
-          <button class="book-row" data-book="${book.id}">
-            <span class="mini-cover">${book.coverUrl ? `<img src="${escapeHtml(book.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : "▥"}</span>
-            <span class="book-row__body"><strong>${escapeHtml(book.title)}</strong><small>${escapeHtml(book.authors.join(", "))}</small>${book.seriesName ? `<small>${escapeHtml(book.seriesName)}${book.seriesNumber ? ` · ${escapeHtml(book.seriesNumber)}` : ""}</small>` : ""}</span>
-            <span class="book-row__meta"><span class="status-dot status-dot--${book.readingStatus}">${escapeHtml(book.readingStatus)}</span>${book.favourite ? `<span class="star" aria-label="Favourite">★</span>` : ""}</span>
-          </button>`).join("")}</div></section>`).join("");
+  return `${topBar("Your collection", "Browse the shelf")}${statusMarkup()}${collectionContent(state.books, state.collection)}`;
+}
 
-  return `${topBar("Your collection", "Browse the shelf")}${statusMarkup()}
-    <main id="main-content" class="content collection-content">
-      <label class="search-box"><span class="sr-only">Search collection</span><span aria-hidden="true">⌕</span><input type="search" id="collection-search" value="${escapeHtml(state.query)}" placeholder="Title, author, series or ISBN" /></label>
-      <div class="segmented" aria-label="Group books by">${(["title", "author", "series", "status"] as GroupMode[]).map((mode) => `<button data-group="${mode}" aria-pressed="${state.groupMode === mode}">${mode === "status" ? "Reading" : mode.charAt(0).toUpperCase() + mode.slice(1)}</button>`).join("")}</div>
-      ${empty}
-    </main>`;
+/** Keep the search node alive so the caret, mobile keyboard and IME stay intact. */
+function refreshCollection(): void {
+  const results = document.querySelector<HTMLElement>("#collection-results");
+  if (results) results.innerHTML = collectionResults(state.books, state.collection);
+}
+
+function resetCollectionFilters(): void {
+  state.collection.query = "";
+  state.collection.status = "all";
+  state.collection.favouritesOnly = false;
+  state.collection.visibleCount = PAGE_SIZE;
+  const search = document.querySelector<HTMLInputElement>("#collection-search");
+  if (search) search.value = "";
+  const status = document.querySelector<HTMLSelectElement>("#collection-status");
+  if (status) status.value = "all";
+  const favourites = document.querySelector<HTMLInputElement>("#collection-favourites");
+  if (favourites) favourites.checked = false;
+  refreshCollection();
+  search?.focus();
 }
 
 function settingsView(): string {
@@ -767,7 +772,8 @@ function readDraftForm(): BookDraft | undefined {
     isbn: String(data.get("isbn") ?? ""),
     title: String(data.get("title") ?? ""),
     subtitle: String(data.get("subtitle") ?? ""),
-    authors: String(data.get("authors") ?? "").split(/\r?\n|,/),
+    // The form promises one author per line; commas can belong to an author's name.
+    authors: String(data.get("authors") ?? "").split(/\r?\n/),
     seriesName: String(data.get("seriesName") ?? ""),
     seriesNumber: String(data.get("seriesNumber") ?? ""),
     publisher: String(data.get("publisher") ?? ""),
@@ -921,6 +927,10 @@ async function beginCheckerLookup(isbnInput: string): Promise<void> {
 }
 
 function openEditor(draft: BookDraft, origin: EditorOrigin = state.view === "checker" ? "checker" : state.view === "collection" ? "collection" : "scan"): void {
+  if (state.view === "collection") {
+    collectionScrollTop = window.scrollY;
+    collectionFocusId = draft.id;
+  }
   stopScanner();
   stopCover();
   state.cover = undefined;
@@ -936,6 +946,7 @@ function openEditor(draft: BookDraft, origin: EditorOrigin = state.view === "che
   state.message = undefined;
   void saveActiveDraft(draft);
   render();
+  window.scrollTo({ top: 0, behavior: "instant" });
 }
 
 async function startCamera(mode: "scan" | "checker" = "scan"): Promise<void> {
@@ -1031,8 +1042,14 @@ async function submitBook(scanNext = false): Promise<void> {
     state.scanState = "ready";
   } else {
     state.view = "collection";
+    if (!draft.id) {
+      // Make a newly added book visible even if the shelf was filtered before adding.
+      state.collection = { query: "", order: "recent", status: "all", favouritesOnly: false, visibleCount: PAGE_SIZE };
+    }
   }
   render();
+  if (draft.id && state.editorOrigin === "collection") restoreCollectionPosition();
+  else window.scrollTo({ top: 0, behavior: "instant" });
 }
 
 async function clearDraftAfterMutation(operation: "save" | "delete"): Promise<boolean> {
@@ -1073,7 +1090,7 @@ async function deleteCurrentBook(): Promise<void> {
 
 async function closeEditor(): Promise<void> {
   if (state.draftDirty && !window.confirm("Discard your unsaved changes?")) return;
-  const destination: View = state.draft?.id ? "collection" : state.editorOrigin === "checker" ? "checker" : "scan";
+  const destination: View = state.draft?.id ? "collection" : state.editorOrigin;
   await clearActiveDraft();
   state.draft = undefined;
   state.draftDirty = false;
@@ -1276,11 +1293,24 @@ function bindEvents(): void {
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitBook(false); });
   document.querySelector<HTMLFormElement>("#book-form")?.addEventListener("input", queueDraftSave);
   document.querySelector<HTMLInputElement>("#collection-search")?.addEventListener("input", (event) => {
-    state.query = (event.target as HTMLInputElement).value;
-    render();
-    const search = document.querySelector<HTMLInputElement>("#collection-search");
-    search?.focus();
-    search?.setSelectionRange(state.query.length, state.query.length);
+    state.collection.query = (event.target as HTMLInputElement).value;
+    state.collection.visibleCount = PAGE_SIZE;
+    refreshCollection();
+  });
+  document.querySelector<HTMLSelectElement>("#collection-status")?.addEventListener("change", (event) => {
+    state.collection.status = (event.target as HTMLSelectElement).value as CollectionOptions["status"];
+    state.collection.visibleCount = PAGE_SIZE;
+    refreshCollection();
+  });
+  document.querySelector<HTMLSelectElement>("#collection-order")?.addEventListener("change", (event) => {
+    state.collection.order = (event.target as HTMLSelectElement).value as CollectionOrder;
+    state.collection.visibleCount = PAGE_SIZE;
+    refreshCollection();
+  });
+  document.querySelector<HTMLInputElement>("#collection-favourites")?.addEventListener("change", (event) => {
+    state.collection.favouritesOnly = (event.target as HTMLInputElement).checked;
+    state.collection.visibleCount = PAGE_SIZE;
+    refreshCollection();
   });
   document.querySelector<HTMLInputElement>("#backup-file")?.addEventListener("change", (event) => {
     void chooseBackup((event.currentTarget as HTMLInputElement).files?.[0]);
@@ -1289,14 +1319,6 @@ function bindEvents(): void {
     state.backupAcknowledged = (event.currentTarget as HTMLInputElement).checked;
     render();
   });
-  document.querySelectorAll<HTMLElement>("[data-group]").forEach((element) => element.addEventListener("click", () => {
-    state.groupMode = element.dataset.group as GroupMode;
-    render();
-  }));
-  document.querySelectorAll<HTMLElement>("[data-book]").forEach((element) => element.addEventListener("click", () => {
-    const book = state.books.find((candidate) => candidate.id === element.dataset.book);
-    if (book) openEditor(bookToDraft(book));
-  }));
   document.querySelectorAll<HTMLElement>("[data-candidate]").forEach((element) => element.addEventListener("click", () => {
     const candidate = state.candidates[Number(element.dataset.candidate)];
     if (candidate) openEditor(candidateToDraft(candidate));
@@ -1339,10 +1361,9 @@ function bindEvents(): void {
     if (action === "save-next") void submitBook(true);
     if (action === "delete-book") void deleteCurrentBook();
     if (action === "undo-delete" && state.deletedBook) void restoreBook(state.deletedBook).then(() => { window.clearTimeout(undoTimer); state.deletedBook = undefined; setMessage("success", "Book restored."); render(); });
-    if (action === "clear-search") { state.query = ""; render(); }
     if (action === "apply-update") void state.updateAction?.();
     if (action === "install-app" && deferredInstall) void deferredInstall.prompt().then(() => { deferredInstall = undefined; render(); });
-    if (action === "request-storage") void navigator.storage?.persist?.().then((granted) => { setMessage(granted ? "success" : "warning", granted ? "Persistent storage was granted on this device." : "Persistent storage was not granted. Keep a backup once export is available."); render(); });
+    if (action === "request-storage") void navigator.storage?.persist?.().then((granted) => { setMessage(granted ? "success" : "warning", granted ? "Persistent storage was granted on this device." : "Persistent storage was not granted. Use Export collection in Settings to keep a backup."); render(); });
     if (action === "export-csv") void exportCurrentCsv();
     if (action === "export-backup") void exportCurrentCatalogue(false);
     if (action === "safety-export") void exportCurrentCatalogue(true);
@@ -1356,6 +1377,31 @@ function bindEvents(): void {
     if (action === "dismiss-backup-reminder") void setSetting("backup-reminder-dismissed", true).then(() => { state.backupReminderDismissed = true; render(); });
   }));
 }
+
+// Delegation avoids one listener per book and works after replacing just the results.
+root.addEventListener("click", event => {
+  if (state.view !== "collection" || !(event.target instanceof Element)) return;
+  const button = event.target.closest<HTMLButtonElement>("[data-book], [data-collection-action]");
+  if (!button) return;
+  if (button.dataset.book) {
+    const book = state.books.find(candidate => candidate.id === button.dataset.book);
+    if (book) openEditor(bookToDraft(book));
+    return;
+  }
+  switch (button.dataset.collectionAction) {
+    case "add": openEditor(emptyDraft(), "collection"); break;
+    case "scan": navigation("scan"); break;
+    case "reset": resetCollectionFilters(); break;
+    case "more": {
+      const previousCount = document.querySelectorAll("[data-book]").length;
+      state.collection.visibleCount += PAGE_SIZE;
+      refreshCollection();
+      // Move keyboard focus to the first revealed book, not to a removed button.
+      document.querySelectorAll<HTMLButtonElement>("[data-book]")[previousCount]?.focus({ preventScroll: true });
+      break;
+    }
+  }
+});
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();

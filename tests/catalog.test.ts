@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicaliseDraft,
+  booksTable,
+  DuplicateBookError,
   findOwnedBookMatch,
   filterBooks,
   groupBooks,
@@ -55,6 +57,15 @@ describe("ISBN normalisation", () => {
 });
 
 describe("canonical book pipeline", () => {
+  it("returns a useful duplicate error when two windows save the same ISBN together", async () => {
+    await booksTable.clear();
+    const results = await Promise.allSettled([saveBook(draft), saveBook(draft)]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find(result => result.status === "rejected");
+    expect(rejected?.reason).toBeInstanceOf(DuplicateBookError);
+    expect(await booksTable.count()).toBe(1);
+    await booksTable.clear();
+  });
   it("trims fields, derives keys, and enforces the Open Library cover origin", () => {
     const result = canonicaliseDraft({
       ...draft,

@@ -12,11 +12,22 @@ A private, phone-first progressive web app for scanning ISBN barcodes and keepin
 - Exact-edition Open Library lookup with timeout, caching, ambiguity handling, and manual fallback.
 - Local IndexedDB catalogue using Dexie; no account, backend, analytics, or hosted database.
 - Editable book details, multiple authors, series, reading state, favourites, search, and grouping.
+- Collection overview, reading/favourite filters, recent additions, and incremental browsing for larger shelves.
 - Duplicate-ISBN protection, durable unsaved drafts, deletion Undo, offline app shell, and install prompt.
 - Mobile-first accessible interface and generated GitHub Pages deployment workflow.
 - Versioned portable JSON export, strict import preview, mandatory safety copy, and atomic replacement rollback.
 - Prompt-based PWA updates, blocked-client messaging, schema compatibility metadata, and v1 golden fixtures.
 - Reliable camera shutdown and fresh catalogue checks when the app is backgrounded, another window changes the collection, or a lookup is cancelled.
+
+## Browsing your collection
+
+Open **Collection** to see how many books are unread, in progress, or finished. Search words can appear in any order across the title, author, and series; ISBN-10 and hyphenated ISBNs also work. Combine the search with **Reading filter** and **Favourites only**, then choose a **Browse by** order.
+
+The shelf initially displays up to 60 entries. **Show more books** reveals the next 60; under Author, a co-authored book can have an entry under each author. Opening an existing book and returning preserves your filters, loaded entries, and scroll position. **Add book** opens manual entry directly from the collection. Newly added books appear first in Recently added with filters cleared so they are easy to find.
+
+Authors are entered one per line. Commas within a name are preserved.
+
+See [the app review and prioritised improvement plan](docs/app-review-2026-10-22.md) for findings, implementation notes, and follow-up work.
 
 ## Book Check
 
