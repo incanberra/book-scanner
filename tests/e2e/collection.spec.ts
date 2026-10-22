@@ -6,7 +6,8 @@ async function seedShelf(page: Page, count = 125) {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Scan a book" })).toBeVisible();
   await page.evaluate(async count => {
-    const modulePath = "/src/catalog.ts";
+    // CI serves the app below the GitHub Pages repository path, not the origin root.
+    const modulePath = new URL("src/catalog.ts", document.baseURI).href;
     const { booksTable } = await import(modulePath) as typeof import("../../src/catalog");
     await booksTable.bulkPut(Array.from({ length: count }, (_, i) => ({
       id: `test-${i}`, title: `Shelf book ${String(i).padStart(3, "0")}`,
