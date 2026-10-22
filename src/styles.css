@@ -131,12 +131,19 @@ textarea { resize: vertical; }
 .form-actions { display: grid; gap: .7rem; padding-top: .5rem; }
 
 .collection-content { display: grid; gap: 1rem; }
+.collection-toolbar, .collection-filter-actions { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.collection-toolbar p { margin: 0; color: var(--ink-muted); font-size: .9rem; }
+.shelf-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; padding: .9rem 0; border-block: 1px solid var(--line); }
+.shelf-summary span { display: grid; gap: .15rem; color: #45584e; font-size: .82rem; }
+.shelf-summary strong { color: var(--green-900); font-family: Georgia, serif; font-size: 1.65rem; }
+.collection-filters { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.collection-filters .field { min-width: 0; }
+.collection-summary { margin: 0 0 .75rem; color: #45584e; font-size: .85rem; }
+#collection-results > .button { margin-top: 1rem; }
+.search-box:focus-within { outline: 3px solid #e5a92b; outline-offset: 3px; }
 .search-box { display: flex; align-items: center; gap: .5rem; border: 1px solid var(--line); border-radius: 15px; padding: 0 .8rem; background: white; }
 .search-box input { border: 0; padding-left: .1rem; }
 .search-box input:focus-visible { outline: 0; }
-.segmented { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; border-radius: 14px; padding: 3px; background: #dedbd3; }
-.segmented button { min-height: 42px; border: 0; border-radius: 11px; background: transparent; color: #536158; font-size: .82rem; font-weight: 700; cursor: pointer; }
-.segmented button[aria-pressed="true"] { background: white; color: var(--green-950); box-shadow: 0 2px 9px rgb(16 40 30 / 9%); }
 .book-group h2 { display: flex; align-items: center; gap: .5rem; margin: 1rem 0 .5rem; font-size: 1.15rem; }
 .book-group h2 span { color: var(--ink-muted); font-family: inherit; font-size: .72rem; }
 .book-list { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); }
@@ -187,7 +194,6 @@ textarea { resize: vertical; }
   .book-hero { grid-template-columns: 88px 1fr; }
   .cover-preview { min-height: 132px; }
   .resume-card { align-items: start; flex-direction: column; }
-  .segmented button { font-size: .72rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

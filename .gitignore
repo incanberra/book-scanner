@@ -11,3 +11,5 @@ test-results/
 
 public/ocr/
 playwright.local.config.ts
+.npm-cache/
+dependency-audit.json

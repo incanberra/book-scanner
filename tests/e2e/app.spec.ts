@@ -90,7 +90,7 @@ test("lookup, edit, save, search, and reopen a book", async ({ page }) => {
   await page.getByText("Favourite").click();
   await page.getByRole("button", { name: "Save book" }).click();
   await expect(page.getByText("read", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Favourite")).toBeVisible();
+  await expect(page.getByLabel("Favourite", { exact: true })).toBeVisible();
 });
 
 test("new ISBN lookup fills normalized series details", async ({ page }) => {
@@ -206,7 +206,7 @@ test("settings backfill adds missing series to an existing ISBN book", async ({ 
   await page.getByRole("button", { name: "Check 1 book" }).click();
   await expect(page.getByText("Series lookup finished. 1 book was updated.")).toBeVisible();
   await page.getByRole("button", { name: "Collection", exact: true }).click();
-  await page.getByRole("button", { name: "Series" }).click();
+  await page.getByLabel("Browse by").selectOption("series");
   await expect(page.getByRole("heading", { name: /Recovered Saga/ })).toBeVisible();
   await expect(page.getByText("Recovered Saga · 2", { exact: true })).toBeVisible();
 });

@@ -259,29 +259,33 @@ export function canonicaliseDraft(input: BookDraft): Omit<Book, "id" | "createdA
 
 export async function saveBook(input: BookDraft): Promise<Book> {
   const canonical = canonicaliseDraft(input);
-  const existing = canonical.isbn13
-    ? await booksTable.where("isbn13").equals(canonical.isbn13).first()
-    : undefined;
-  if (existing && existing.id !== input.id) throw new DuplicateBookError(existing.id);
+  // Serialize the duplicate check, capacity check and write across tabs. The
+  // unique index remains a final defence, but callers receive a useful error.
+  return bookDatabase.transaction("rw", booksTable, async () => {
+    const existing = canonical.isbn13
+      ? await booksTable.where("isbn13").equals(canonical.isbn13).first()
+      : undefined;
+    if (existing && existing.id !== input.id) throw new DuplicateBookError(existing.id);
 
-  const current = input.id ? await booksTable.get(input.id) : undefined;
-  if (!current && await booksTable.count() >= MAX_BOOKS) {
-    throw new ValidationError(`The catalogue limit is ${MAX_BOOKS} books.`);
-  }
+    const current = input.id ? await booksTable.get(input.id) : undefined;
+    if (!current && await booksTable.count() >= MAX_BOOKS) {
+      throw new ValidationError(`The catalogue limit is ${MAX_BOOKS} books.`);
+    }
 
-  const now = new Date().toISOString();
-  const book: Book = {
-    ...canonical,
-    id: current?.id ?? crypto.randomUUID(),
-    createdAt: current?.createdAt ?? now,
-    updatedAt: now
-  };
-  const { authorKeys: _authorKeys, seriesKey: _seriesKey, ...portableFields } = book;
-  if (new TextEncoder().encode(JSON.stringify(portableFields)).byteLength > MAX_PORTABLE_RECORD_BYTES) {
-    throw new ValidationError("This book’s details exceed the 12 KiB portable-record limit.");
-  }
-  await booksTable.put(book);
-  return book;
+    const now = new Date().toISOString();
+    const book: Book = {
+      ...canonical,
+      id: current?.id ?? crypto.randomUUID(),
+      createdAt: current?.createdAt ?? now,
+      updatedAt: now
+    };
+    const { authorKeys: _authorKeys, seriesKey: _seriesKey, ...portableFields } = book;
+    if (new TextEncoder().encode(JSON.stringify(portableFields)).byteLength > MAX_PORTABLE_RECORD_BYTES) {
+      throw new ValidationError("This book’s details exceed the 12 KiB portable-record limit.");
+    }
+    await booksTable.put(book);
+    return book;
+  });
 }
 
 export async function removeBook(id: string): Promise<Book | undefined> {
@@ -350,16 +354,26 @@ export function emptyDraft(isbn?: string): BookDraft {
   };
 }
 
+// Catalogue snapshots are replaced by liveQuery after edits. Weak keys let old
+// snapshots be collected without keeping a second, unbounded copy of the shelf.
+const searchText = new WeakMap<Book, string>();
+
 export function filterBooks(books: Book[], query: string): Book[] {
-  const needle = normaliseKey(query);
-  if (!needle) return [...books];
-  return books.filter((book) => normaliseKey([
-    book.title,
-    book.subtitle,
-    ...book.authors,
-    book.seriesName,
-    book.isbn13
-  ].filter(Boolean).join(" ")).includes(needle));
+  const terms = normaliseKey(query).split(" ").filter(Boolean);
+  if (!terms.length) return [...books];
+  // A pasted, hyphenated ISBN should behave like the same barcode scanned.
+  const compactQuery = query.replace(/[\s-]/g, "");
+  let isbn: string | undefined;
+  try { isbn = normaliseIsbn(query); } catch { /* Ordinary title/author search. */ }
+  return books.filter(book => {
+    if (book.isbn13 && (book.isbn13 === isbn || /^\d{4,13}$/.test(compactQuery) && book.isbn13.includes(compactQuery))) return true;
+    let haystack = searchText.get(book);
+    if (haystack === undefined) {
+      haystack = normaliseKey([book.title, book.subtitle, ...book.authors, book.seriesName, book.isbn13].filter(Boolean).join(" "));
+      searchText.set(book, haystack);
+    }
+    return terms.every(term => haystack.includes(term));
+  });
 }
 
 export type GroupMode = "title" | "author" | "series" | "status";
@@ -400,10 +414,14 @@ function compareSeriesNumbers(left?: string, right?: string): number {
 
 export function groupBooks(books: Book[], mode: GroupMode): BookGroup[] {
   const groups = new Map<string, BookGroup>();
-  const labels = authorLabels(books);
+  const labels = mode === "author" ? authorLabels(books) : new Map<string, string>();
+  const seen = new Map<string, Set<string>>();
   const add = (key: string, label: string, book: Book) => {
     const group = groups.get(key) ?? { key, label, books: [] };
-    if (!group.books.some((candidate) => candidate.id === book.id)) group.books.push(book);
+    const ids = seen.get(key) ?? new Set<string>();
+    if (!ids.has(book.id)) group.books.push(book);
+    ids.add(book.id);
+    seen.set(key, ids);
     groups.set(key, group);
   };
 
